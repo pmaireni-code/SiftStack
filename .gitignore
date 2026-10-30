@@ -68,7 +68,10 @@ Thumbs.db
 *.swp
 
 # Claude Code / planning
-.claude/
+# Only the session hook and its settings are tracked; installed skills stay local.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 .planning/
 .playwright-mcp/
 
