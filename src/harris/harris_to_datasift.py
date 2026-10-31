@@ -87,11 +87,25 @@ def main(match_path, meta_path, out_path):
                     # Never in the notice: the lender sets the credit bid a day or two before the sale
                     "Starting Bid": "", "Auction Date": fmt(st["auction_date"]),
                     "Contract Deadline": fmt(st["contract_deadline"]), "Foreclosure Status": st["status"]})
+    # A property can carry several notices (re-posted, corrected, a second lien): one row per HCAD
+    # account, keeping the most recently filed notice, the others named in its Notes
+    by_acct = {}
+    for row in out:
+        filed = parse_date(row["Notes"].split(" filed ", 1)[1].split(",")[0]) if " filed " in row["Notes"] else None
+        prev = by_acct.get(row["Parcel ID"])
+        if prev is None or (filed and (prev[0] is None or filed > prev[0])):
+            if prev:
+                row["Notes"] += f" Also noticed as {prev[1]['Notes'].split()[4]}."
+            by_acct[row["Parcel ID"]] = (filed, row)
+        else:
+            prev[1]["Notes"] += f" Also noticed as {row['Notes'].split()[4]}."
+    dupes = len(out) - len(by_acct)
+    out = [r for _, r in by_acct.values()]
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(out)
-    print(f"{len(out)} rows written, {skipped} unmatched left out")
+    print(f"{len(out)} rows written, {skipped} unmatched left out, {dupes} duplicate notices folded")
 
 
 if __name__ == "__main__":
