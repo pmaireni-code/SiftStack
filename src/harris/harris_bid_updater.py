@@ -63,6 +63,7 @@ def refresh(lead, by_num, today):
     tags = [t.strip() for t in lead["Tags"].split(",") if t.strip()]
     if st["status"] == "Postponed":
         lead["Starting Bid"] = ""  # last month's bid does not carry over to the new sale
+        tags.append("Postponed")  # the status reads Active again tomorrow; the tag keeps the history
         tags = [t for t in tags if t != "Bid Posted"]
     if current:
         x = current[0]
@@ -76,39 +77,60 @@ def refresh(lead, by_num, today):
     return st["status"]
 
 
-def push_to_datasift(rows, commit):
-    from ds import DS, rows as rows_of
-    d = DS()
-    fields = {f["label"]: f for f in rows_of(d.call("/api/internal/custom-fields/?limit=999")[1])}
+def push_to_datasift(rows, commit, before):
+    """Write the day's changes back. Only leads whose Starting Bid, Auction Date, Contract Deadline or
+    Foreclosure Status moved get a call: a quiet day costs a handful of writes, not one per lead."""
+    from harris_upload import PatientApi
+    from datasift_api_upload import attach_to_record, field_index
+    api = PatientApi()
+    fields = field_index(api)
     missing = [f for f in DATASIFT_FIELDS if f not in fields]
     if missing:
         print("DataSift: missing custom fields", missing)
-    for r in rows:
-        st, res = d.call("/api/internal/property/", "POST", {"limit": 10, "offset": 0, "query": {"must": {
-            "property_type": "clean", "search": "address_prefix:" + r["Property Street Address"]}}}, {"x-http-method-override": "GET"})
-        hit = next((x for x in rows_of(res) if addr_key((x.get("address") or {}).get("street")) == addr_key(r["Property Street Address"])), None)
-        if not hit:
-            print(f"  not in DataSift yet: {r['Property Street Address']}")
-            continue
+    changed = [r for r, b in zip(rows, before) if any((r.get(k) or "") != (b.get(k) or "") for k in DATASIFT_FIELDS)]
+    print(f"DataSift: {len(changed)} of {len(rows)} leads changed today")
+    for r in changed:
+        uuid = r.get("uuid")
+        if not uuid:
+            hit = api.call("/api/internal/property/", "POST", {"limit": 10, "offset": 0, "query": {"must": {
+                "property_type": "clean", "search": "address_prefix:" + r["Property Street Address"]}}},
+                headers={"x-http-method-override": "GET"})
+            hit = next((x for x in (hit.get("results") or hit.get("data") or [])
+                        if addr_key((x.get("address") or {}).get("street")) == addr_key(r["Property Street Address"])), None)
+            if not hit:
+                print(f"  not in DataSift yet: {r['Property Street Address']}")
+                continue
+            uuid = hit["uuid"]
         values = []
         for label in DATASIFT_FIELDS:
             f, v = fields.get(label), r.get(label)
-            if not f or not v:
+            if not f:
                 continue
-            if f.get("field_type") == "date":
+            if not v:
+                if label == "Starting Bid":  # a postponement voids last month's bid
+                    values.append({"field_uuid": f["uuid"], "value": None})
+                continue
+            if f["field_type"] == "date":
                 v = parse_date(v).isoformat()
-            elif f.get("field_type") == "select":
-                v = next((o.get("uuid") or o.get("id") for o in f.get("options") or [] if o.get("label") == v), None)
+            elif f["field_type"] == "select":
+                v = f["options"].get(v)
             if v:
                 values.append({"field_uuid": f["uuid"], "value": v})
+        what = ", ".join(f"{k}={r.get(k) or '-'}" for k in DATASIFT_FIELDS)
         if not commit:
-            print(f"  DRY  {r['Property Street Address']}: {', '.join(f'{k}={r.get(k)}' for k in DATASIFT_FIELDS if r.get(k))}")
+            print(f"  DRY  {r['Property Street Address']}: {what}")
             continue
-        st, res = d.call(f"/api/internal/property/{hit['uuid']}/custom-field/update-values/", "PATCH", values)
-        # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well
-        if st < 300 and parse_date(r.get("Auction Date")):
-            st, res = d.call(f"/api/internal/property/{hit['uuid']}/", "PATCH", {"auction_date": parse_date(r["Auction Date"]).isoformat()})
-        print(f"  {'OK  ' if st < 300 else 'FAIL'} {r['Property Street Address']} ({st}){'' if st < 300 else ' ' + str(res)[:200]}")
+        try:
+            api.call(f"/api/internal/property/{uuid}/custom-field/update-values/", "PATCH", values)
+            # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well
+            if parse_date(r.get("Auction Date")):
+                api.call(f"/api/internal/property/{uuid}/", "PATCH", {"auction_date": parse_date(r["Auction Date"]).isoformat()})
+            add = [t for t in ("Bid Posted", "Postponed") if t in r.get("Tags", "")]
+            if add:
+                attach_to_record(api, uuid, {"tags": add})
+            print(f"  OK   {r['Property Street Address']}: {what}")
+        except Exception as e:
+            print(f"  FAIL {r['Property Street Address']}: {str(e)[:200]}")
 
 
 def main(leads_path, bids_path, out_path, *flags):
@@ -123,6 +145,7 @@ def main(leads_path, bids_path, out_path, *flags):
     fields = list(rows[0].keys()) + [c for c in extra if c not in rows[0]]
     today = date.today()
     counts = {}
+    before = [dict(r) for r in rows]
     for r in rows:
         s = refresh(r, by_num, today)
         counts[s] = counts.get(s, 0) + 1
@@ -134,9 +157,10 @@ def main(leads_path, bids_path, out_path, *flags):
     bids = sum(bool(r.get("Starting Bid")) for r in rows)
     print(f"{len(rows)} leads | status {counts} | {listed} listed on an auction site | {bids} with a published bid")
     if "--datasift" in flags:
-        push_to_datasift(rows, "--commit" in flags)
+        push_to_datasift(rows, "--commit" in flags, before)
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, __file__.rsplit("/", 1)[0])
+    here = __file__.rsplit("/", 1)[0] if "/" in __file__ else "."
+    sys.path[:0] = [here, here + "/.."]
     main(*sys.argv[1:])

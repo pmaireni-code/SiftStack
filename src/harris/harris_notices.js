@@ -1,6 +1,9 @@
 // Download Harris County Clerk foreclosure notices (trustee sale notices) for one sale month.
 //
-// Usage: node harris_notices.js <year> <month> <out_dir> [limit]
+// Usage: node harris_notices.js <year> <month> <out_dir> [limit] [--since-days N]
+//
+// --since-days N downloads only notices FILED in the last N days (the grid's File Date), which is
+// what a weekly run wants: the sale month keeps growing until ~3 weeks before the sale.
 //
 // The clerk's FRCL search needs no login and no CAPTCHA. Results come 38 to a page in an ASP.NET
 // grid; each Doc ID link streams the scanned PDF as a download. Two passes, because downloading
@@ -13,8 +16,13 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE = 'https://www.cclerk.hctx.net/Applications/WebSearch/';
-const [year, month, outDir, limitArg] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const sinceIdx = args.indexOf('--since-days');
+const sinceDays = sinceIdx >= 0 ? Number(args.splice(sinceIdx, 2)[1]) : null;
+const [year, month, outDir, limitArg] = args;
 const limit = Number(limitArg) || Infinity;
+const parseUS = s => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s || ''); return m ? new Date(+m[3], +m[1] - 1, +m[2]) : null; };
+const cutoff = sinceDays != null ? new Date(Date.now() - sinceDays * 86400000) : null;
 
 async function readGrid(page, lastFirst) {
   // The pager postback swaps the grid in asynchronously: poll until it shows a different page
@@ -66,7 +74,10 @@ async function readGrid(page, lastFirst) {
     await next.click();
     pageNo++;
   }
-  const todo = all.slice(0, limit);
+  // grid cells: [select, doc id, sale date, file date, pages]
+  const recent = cutoff ? all.filter(r => { const d = parseUS(r.cells.filter(c => /^\d{2}\/\d{2}\/\d{4}$/.test(c))[1]); return d && d >= cutoff; }) : all;
+  if (cutoff) console.log(`${recent.length} of ${all.length} filed in the last ${sinceDays} days`);
+  const todo = recent.slice(0, limit);
   console.log(`walked ${pageNo} page(s): ${all.length} rows${total && all.length < Math.min(total, limit) ? ' (SHORT of the listed count)' : ''}`);
 
   // Pass 2: download from a separate tab in the same session

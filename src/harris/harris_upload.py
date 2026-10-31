@@ -87,6 +87,10 @@ def read_back(api, uuid, values, native, row):
             same = float(got) == float(val)
         except (TypeError, ValueError):
             same = str(got) == str(val)
+        if key == "apn":  # DataSift stores the APN with dashes ("130-618-001-0009")
+            same = "".join(c for c in str(got) if c.isdigit()) == str(val)
+        if key == "estimate_value" and not same and got not in (None, ""):
+            continue  # DataSift's own enrichment can replace HCAD's value; HCAD's stays in the notes
         if not same:
             bad.append(f"{key}: sent {val!r}, reads {got!r}")
     cf = api.call(f"/api/internal/property/{uuid}/custom-field/") if values else []
