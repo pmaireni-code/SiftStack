@@ -26,7 +26,11 @@ python3 src/harris/hcad_index.py work/hcad --download
 python3 src/harris/harris_match.py work/notices/ocr work/hcad/idx.tsv work/match.csv
 python3 src/harris/harris_to_datasift.py work/match.csv work/notices/meta.json work/leads.csv
 
-# 5. Every day until the sale: opening bids, postponements, status
+# 5. Into DataSift: one record first, read back, then the rest (re-runs attach, never duplicate notes)
+python3 src/harris/harris_upload.py work/leads.csv --limit 1 --commit
+python3 src/harris/harris_upload.py work/leads.csv --commit
+
+# 6. Every day until the sale: opening bids, postponements, status
 node src/harris/bid_sources.js work/bids.json
 python3 src/harris/harris_bid_updater.py work/leads.csv work/bids.json work/leads.csv --datasift          # dry run
 python3 src/harris/harris_bid_updater.py work/leads.csv work/bids.json work/leads.csv --datasift --commit
@@ -79,3 +83,11 @@ A listing for a LATER sale date is a postponement and never back-fills this mont
 
 `DEADLINE_DAYS = 7` (set by the operator). Servicers have up to 7 business days to send a payoff
 statement, so a contract signed near the deadline should already have the payoff requested.
+
+## DataSift contract (verified live 2026-10-31)
+
+- Custom field values read back from `GET /api/internal/property/{uuid}/custom-field/`, keyed by
+  `custom_field.uuid`; dates are written as `YYYY-MM-DD`, selects as the option uuid.
+- Native fields `estimate_value`, `year`, `sqft`, `apn` and `auction_date` take a `PATCH` on the record.
+- `add-notes` APPENDS and the record's `notes` cannot be edited over the API, so the uploader skips a
+  note whose notice doc id is already on the record.

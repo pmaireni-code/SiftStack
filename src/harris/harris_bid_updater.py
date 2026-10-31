@@ -102,6 +102,9 @@ def push_to_datasift(rows, commit):
             print(f"  DRY  {r['Property Street Address']}: {', '.join(f'{k}={r.get(k)}' for k in DATASIFT_FIELDS if r.get(k))}")
             continue
         st, res = d.call(f"/api/internal/property/{hit['uuid']}/custom-field/update-values/", "PATCH", values)
+        # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well
+        if st < 300 and parse_date(r.get("Auction Date")):
+            st, res = d.call(f"/api/internal/property/{hit['uuid']}/", "PATCH", {"auction_date": parse_date(r["Auction Date"]).isoformat()})
         print(f"  {'OK  ' if st < 300 else 'FAIL'} {r['Property Street Address']} ({st}){'' if st < 300 else ' ' + str(res)[:200]}")
 
 
