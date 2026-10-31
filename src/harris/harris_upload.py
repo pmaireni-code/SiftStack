@@ -10,7 +10,7 @@ array, entity owners as company, notes posted separately). Adds the Harris custo
 by label from the "Foreclosure" group, and the native property facts HCAD gives us. Every record is
 read back after the write and any field that did not land is reported.
 """
-import csv, os, sys, time
+import csv, os, re, sys, time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from datasift_api_upload import Api, ApiError, build_property, create_property, field_index  # noqa: E402
@@ -102,11 +102,27 @@ def read_back(api, uuid, values, native, row):
     return bad, rec
 
 
+class PatientApi(Api):
+    """DataSift throttles /api/internal/ hard (~2 req/s). Wait out a 429 or a 5xx, honouring the
+    server's "available in N seconds" hint, instead of counting a throttled call as a failed lead."""
+
+    def call(self, path, method="GET", body=None, _retry=True, headers=None):
+        for attempt in range(6):
+            try:
+                return super().call(path, method, body, _retry, headers)
+            except ApiError as e:
+                if e.code != 429 and e.code < 500 or attempt == 5:
+                    raise
+                hint = re.search(r"(\d+) second", e.body or "")
+                time.sleep(int(hint.group(1)) + 1 if hint else 2 ** attempt)
+
+
 def main(path, *flags):
     commit = "--commit" in flags
     limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
-    rows = list(csv.DictReader(open(path, encoding="utf-8")))[: limit or None]
-    api = Api()
+    start = int(flags[flags.index("--start") + 1]) if "--start" in flags else 0
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))[start:][: limit or None]
+    api = PatientApi()
     idx = field_index(api)
     print(f"[{'COMMIT' if commit else 'DRY RUN'}] {len(rows)} leads | {len(idx)} custom fields in the account\n")
     ok = failed = 0
