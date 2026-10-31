@@ -191,3 +191,6 @@ pb.html
 *.mp4
 # Windows artifact from a stray shell redirect.
 NUL
+
+# Harris foreclosure pipeline working data (notices, HCAD roll, lead CSVs carry owner PII)
+work/
