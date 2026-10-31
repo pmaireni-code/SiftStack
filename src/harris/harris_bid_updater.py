@@ -19,6 +19,7 @@ from harris_status import assess, parse_date
 
 SUFFIX = {"DRIVE": "DR", "LANE": "LN", "STREET": "ST", "ROAD": "RD", "COURT": "CT", "CIRCLE": "CIR", "AVENUE": "AVE",
           "BOULEVARD": "BLVD", "TRAIL": "TRL", "PLACE": "PL", "PARKWAY": "PKWY", "TERRACE": "TER", "HOLLOW": "HOLW"}
+SAME_SALE_DAYS = 3
 DATASIFT_FIELDS = ("Starting Bid", "Auction Date", "Contract Deadline", "Foreclosure Status")
 
 
@@ -49,9 +50,11 @@ def listings_for(lead, by_num):
 def refresh(lead, by_num, today):
     sale = parse_date(lead.get("Auction Date") or lead["Foreclosure Date"])
     found = listings_for(lead, by_num)
-    later = sorted(parse_date(x["sale_date"]) for x in found if parse_date(x["sale_date"]) and sale and parse_date(x["sale_date"]) > sale)
+    # Listing dates drift a day from the notice (Xome stores the sale in UTC: 12/01 10 AM shows 12/02), and
+    # a real postponement moves to a later first Tuesday, so anything within SAME_SALE_DAYS is this sale
+    later = sorted(d for d in (parse_date(x["sale_date"]) for x in found) if d and sale and (d - sale).days > SAME_SALE_DAYS)
     st = assess(sale, today, postponed_to=later[0] if later else None)
-    current = [x for x in found if parse_date(x["sale_date"]) == st["auction_date"]]
+    current = [x for x in found if parse_date(x["sale_date"]) and abs((parse_date(x["sale_date"]) - st["auction_date"]).days) <= SAME_SALE_DAYS]
     # A published bid beats a TBD listing; Auction.com's "Opening Bid" beats Xome's estimate
     current.sort(key=lambda x: (x["bid"] is None, x["source"] != "Auction.com"))
     fmt = lambda d: d.strftime("%m/%d/%Y") if d else ""

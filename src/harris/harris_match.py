@@ -3,7 +3,7 @@
 Usage: python3 harris_match.py <ocr_dir> <hcad_idx.tsv> <out.csv>
 """
 import csv, difflib, glob, os, re, sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 WORDS = {w: i for i, w in enumerate(
     "ZERO ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT NINE TEN ELEVEN TWELVE THIRTEEN FOURTEEN "
@@ -40,10 +40,18 @@ def parse(text):
         out["apn"] = re.sub(r"\D", "", m.group(1))
     m = re.search(r"(?:COMMONLY KNOWN AS|PROPERTY ADDRESS)\s*:?\s*(\d{2,6})[:;,.]?\s+([A-Z][A-Z ]{2,40}?)\s"
                   r"(LN|LANE|DR|DRIVE|ST|STREET|RD|ROAD|CT|COURT|CIR|CIRCLE|AVE|AVENUE|BLVD|TRL|TRAIL|PL|PLACE|WAY|PKWY)\b", flat)
+    if not m:
+        # The watermark often eats the street suffix ("6410 SPARROWS GLE G, TX"): take the number and
+        # the next two words; matching only compares the first words of the street anyway
+        m = re.search(r"(?:COMMONLY KNOWN AS|PROPERTY ADDRESS)\s*:?\s*(\d{2,6})[:;,.]?\s+([A-Z]{3,}(?: [A-Z]{2,})?)", flat)
     if m:
         out["addr_num"], out["addr_street"] = m.group(1), m.group(2).strip()
-    m = re.search(r"(?:\bLOT|\bL?OT|^T|\sT)\s+" + NUM + r",?(?:[^,]{0,60}?)\s*(?:[I1{]?N\s+)?BLOCK\s+" + NUM + r"\s*,?\s*(?:OF\s+)?(?:THE\s+)?(?:REPLAT OF\s+)?(.{3,80}?)"
-                  r"(?:,?\s*(?:A|AN)\s+(?:SUBD|SUBDIVISION|ADDITION|REPLAT|DIVISION)|,?\s*IN HARRIS|,\s*ACCORDING|$)", flat)
+    head = r"(?:\bLOT|\bL?OT|^T|\sT)\s+" + NUM + r",?(?:[^,]{0,60}?)\s*(?:[I1{]?N\s+)?BLOCK\s+" + NUM + r"\s*,?\s*(?:OF\s+)?(?:THE\s+)?(?:REPLAT OF\s+)?"
+    m = re.search(head + r"(.{3,80}?)(?:,?\s*(?:A|AN)\s+(?:SUBD|SUBDIVISION|ADDITION|REPLAT|DIVISION)|,?\s*IN HARRIS|,\s*ACCORDING|$)", flat)
+    if not m:
+        # No clean end to the description (the watermark cut it): keep what was read, up to the
+        # first comma that is not a section number
+        m = re.search(head + r"([A-Z][A-Z0-9 .'&-]{2,60}(?:,\s*SEC(?:TION)?\.?\s*[A-Z0-9()]+)?)", flat)
     if m:
         out["lot"], out["block"], out["subdiv"] = word_num(m.group(1)), word_num(m.group(2)), m.group(3)
     m = re.search(r"(?:EXECUTED BY|GRANTOR\(S\)/MO\w*\s?\w*GAGOR\(S\)\s*:?|TRUSTOR\(S\)\s*:?)\s*(?:[\d/]+\s+)?([A-Z][A-Z .,'-]{4,80}?)"
@@ -119,12 +127,20 @@ def parse_loan(flat):
     return out
 
 
+# Words the OCR'd legal description drags in that are not part of any HCAD subdivision name
+LEGAL_NOISE = {"HARRIS", "COUNTY", "TEXAS", "TX", "SUBDIVISION", "SUBD", "ADDITION", "AN", "A", "IN", "OF", "THE",
+               "AMENDING", "AMENDED", "PLAT", "MAP", "RECORDS", "ACCORDING", "THEREOF", "RECORDED"}
+
+
 def norm_subdiv(s):
     s = s.upper()
+    # "BAUER LANDING, SIX (6)": the OCR ate the word SECTION, the parenthesised number is still the section
+    if not re.search(r"\bSEC", s):
+        s = re.sub(r",\s*[A-Z]+\s*\((\d+)\)\s*$", r" SEC \1", s)
     s = re.sub(r"\bSECTION\b", "SEC", s)
     s = re.sub(r"\b(SEC)\s+([A-Z]+(?:[- ][A-Z]+)?)\s*(?:\((\d+)\))?", lambda m: f"SEC {m.group(3) or word_num(m.group(2)) or m.group(2)}", s)
     s = re.sub(r"\(\d+\)", "", s)
-    return re.sub(r"[^A-Z0-9 ]", " ", re.sub(r"\s+", " ", s)).split()
+    return [t for t in re.sub(r"[^A-Z0-9 ]", " ", re.sub(r"\s+", " ", s)).split() if t not in LEGAL_NOISE]
 
 
 def tokens(name):
@@ -136,6 +152,28 @@ def main(ocr_dir, idx_path, out_path):
     for p in sorted(glob.glob(os.path.join(ocr_dir, "*.txt"))):
         text = open(p).read()
         notices[os.path.basename(p)[:-4]] = {**parse(text), "_text": re.sub(r"\s+", " ", text.upper())}
+    # Words in the legal boilerplate of most notices ("CURRENT mortgagee", "CITY", "STATE") cannot
+    # confirm an owner's surname: HCAD has owners literally named CURRENT OWNER and CITY OF HOUSTON
+    df = Counter(w for n in notices.values() for w in set(re.findall(r"[A-Z]{3,}", n["_text"])))
+    boiler = {w for w, k in df.items() if k > 0.15 * len(notices)}
+
+    def surname_seen(owner, borrower, text):
+        """The owner of record is named in this notice: surname in the parsed borrower, or at least TWO
+        of the owner's name words anywhere in the text (one word alone matched OCR noise: "Cope" was
+        "Tex Prop Code", "San" is any San ...)."""
+        # HCAD drops hyphens ("CHADROBERT"), the notice keeps them ("Chad-Robert"): compare without them
+        owner, text = owner.replace("-", ""), text.replace("-", "")
+        words = [w.rstrip(",") for w in owner.split() if len(w.rstrip(",")) >= 3 and w not in NOISE and w.rstrip(",") not in boiler]
+        if not words or owner.split()[0].rstrip(",") not in words:
+            return False
+        if words[0] in borrower:
+            return True
+        # The SURNAME must be there, next to another word of the same name ("CHRISTIAN, MARQUI" or
+        # "MARQUI CHRISTIAN"): words scattered across the notice matched a law firm's "Camino Del Rio"
+        others = "|".join(re.escape(w) for w in words[1:3])
+        sur = re.escape(words[0])
+        return bool(others) and bool(re.search(rf"\b{sur}\b\W+(?:\w+\W+)?(?:{others})\b|\b(?:{others})\b\W+(?:\w+\W+)?{sur}\b", text))
+
     want_legal = {(n["lot"], n["block"]) for n in notices.values() if n.get("lot") is not None and n.get("block") is not None}
     lot_blk = re.compile(r"\bLTS? (\d+)\b.*?\bBLK (\d+)\b")
     want_addr = {n["addr_num"] for n in notices.values() if "addr_num" in n}
@@ -178,21 +216,35 @@ def main(ocr_dir, idx_path, out_path):
         if best is None and n.get("lot") is not None and n.get("block") is not None:
             want = " ".join(norm_subdiv(n.get("subdiv", "")))
             borrower = tokens(n.get("borrower"))
+            # "HARRIS COUNTY, TEXAS" is not a subdivision: with nothing real to compare, only the
+            # owner's surname appearing in the notice can carry the match
+            meaningful = any(len(t) >= 4 and not t.isdigit() and t != "SEC" for t in want.split())
+            plain = {}  # subdivision similarity before any surname boost, per HCAD legal name
+            named = False  # the winning candidate was confirmed by the owner's name
             for r in by_legal.get((n["lot"], n["block"]), []):
-                s = difflib.SequenceMatcher(None, want, r["lgl_2"]).ratio()
-                # OCR often truncates the subdivision ("FAIRGR"): a prefix hit counts as a strong match
-                if len(want) >= 5 and r["lgl_2"].startswith(want[:6]):
-                    s = max(s, 0.8)
-                # HCAD writes LAST FIRST: only the owner's SURNAME agreeing with the borrower counts
-                # ...and only as a tie-break: a shared surname never rescues a different subdivision
-                if s >= 0.4 and r["owner"].split(" ", 1)[0] in borrower:
-                    s += 0.5
+                s = difflib.SequenceMatcher(None, want, r["lgl_2"]).ratio() if meaningful else 0.4
+                # OCR often truncates the subdivision ("FAIRGR"): counts only when what was read is a
+                # true prefix of the HCAD name, never a shared first word ("ROYAL OAKS TERRANCE" is not
+                # ROYAL OAKS COURT)
+                if meaningful and len(want) >= 5 and r["lgl_2"].startswith(want):
+                    s = max(s, 0.85)
                 ws, hs = re.search(r"\bSEC (\d+)", want), re.search(r"\bSEC (\d+)", r["lgl_2"])
                 if ws and hs and ws.group(1) != hs.group(1):
                     s -= 0.5
+                plain[r["lgl_2"]] = max(plain.get(r["lgl_2"], 0), s)
+                # HCAD writes LAST FIRST: the owner's SURNAME in the borrower or anywhere in the notice
+                # confirms, but only as a tie-break: it never rescues a different subdivision
+                seen = s >= 0.4 and surname_seen(r["owner"], borrower, n["_text"])
+                if seen:
+                    s += 0.5
                 if s > score:
-                    best, score, how = r, s, "legal"
-            if score < 0.6:
+                    best, score, how, named = r, s, "legal", seen
+            # Several sections of one subdivision fit equally well when the OCR lost the section number
+            # ("BAUER LANDING, ION"): without the owner's name to break the tie, no match beats a guess
+            top = sorted(plain.values(), reverse=True)
+            if best is not None and not named and len(top) > 1 and top[1] >= top[0] - 0.05:
+                best, score, how = None, 0.0, ""
+            if score < 0.75:
                 best, score, how = None, 0.0, ""
         if best is None and n.get("borrower"):
             # Last resort (condos, unreadable legal): owner must carry 2+ borrower name tokens, and be unique
@@ -201,8 +253,7 @@ def main(ocr_dir, idx_path, out_path):
             uniq = {r["acct"]: r for r in cands}
             if len(uniq) == 1:
                 best, score, how = next(iter(uniq.values())), 0.7, "name"
-        surname = best["owner"].split(" ", 1)[0].rstrip(",") if best else ""
-        name_ok = bool(best and (surname in tokens(n.get("borrower")) or re.search(r"\b" + re.escape(surname) + r"\b", n["_text"])))
+        name_ok = bool(best and surname_seen(best["owner"], tokens(n.get("borrower")), n["_text"]))
         rows.append({"doc": doc, "match": how or "NONE", "score": round(score, 2), "name_confirmed": name_ok,
                      "borrower_ocr": n.get("borrower", ""), "lot": n.get("lot"), "block": n.get("block"),
                      "loan_amount": n.get("loan_amount", ""), "loan_date": n.get("loan_date", ""), "lender": n.get("lender", ""),
