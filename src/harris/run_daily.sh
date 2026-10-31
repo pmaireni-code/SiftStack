@@ -3,7 +3,7 @@
 #
 #   bash src/harris/run_daily.sh [--dry-run]
 #
-# Reads the leads from the DataSift list itself (no local state), pulls today's Auction.com / Xome
+# Reads the leads from the CRM list itself (no local state), pulls today's Auction.com / Xome
 # listings, recomputes dates and status, and writes back only the leads that changed.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -11,10 +11,10 @@ COMMIT="--commit"; [[ "${1:-}" == "--dry-run" ]] && COMMIT=""
 W=work/daily_$(date +%Y%m%d)
 mkdir -p "$W"
 
-python3 src/harris/harris_from_datasift.py "$W/leads.csv"
+python3 src/harris/harris_from_crm.py "$W/leads.csv"
 node src/harris/bid_sources.js "$W/bids.json"
 cd src/harris
-python3 harris_bid_updater.py "../../$W/leads.csv" "../../$W/bids.json" "../../$W/refreshed.csv" --datasift $COMMIT | tee "../../$W/daily.log"
+python3 harris_bid_updater.py "../../$W/leads.csv" "../../$W/bids.json" "../../$W/refreshed.csv" --crm $COMMIT | tee "../../$W/daily.log"
 python3 - "../../$W/refreshed.csv" <<'EOF'
 import csv, sys
 from collections import Counter

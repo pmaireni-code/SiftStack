@@ -91,3 +91,17 @@ statement, so a contract signed near the deadline should already have the payoff
 - Native fields `estimate_value`, `year`, `sqft`, `apn` and `auction_date` take a `PATCH` on the record.
 - `add-notes` APPENDS and the record's `notes` cannot be edited over the API, so the uploader skips a
   note whose notice doc id is already on the record.
+
+## Switching CRM (src/harris/crm/)
+
+Everything that talks to a CRM lives in `crm/`. The rest of the pipeline only calls three methods
+(`crm/base.py`): `upsert_lead(row, commit)`, `read_leads(list_name)`, `update_lead(id, values, add_tags)`.
+`HARRIS_CRM` picks the connector (default `datasift`). To move to another CRM (Odoo, a white label):
+copy `crm/TEMPLATE.py`, implement the three methods, register it in `crm/__init__.py`, set
+`HARRIS_CRM=<name>`, then dry-run `harris_upload.py` and `run_daily.sh --dry-run`. Notices, OCR,
+HCAD matching, dates, status and bids do not change. The lead columns are documented in `crm/base.py`.
+
+DataSift specifics learned live (`crm/datasift.py`): a record short of data (company owner, missing
+mailing line) is filed as `incomplete`, not `clean`, so reading a list must query both types (27 of
+335 Harris leads were `incomplete`); clearing a custom field takes `""`, while `null` is rejected and
+the whole update is dropped with it.

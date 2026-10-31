@@ -1,7 +1,7 @@
 """Daily refresh of Harris foreclosure leads: Starting Bid, postponements, and Foreclosure Status.
 
     node bid_sources.js bids.json
-    python3 harris_bid_updater.py <leads.csv> <bids.json> <out.csv> [--datasift [--commit]]
+    python3 harris_bid_updater.py <leads.csv> <bids.json> <out.csv> [--crm [--commit]]
 
 Per lead:
   * Starting Bid from the Auction.com / Xome listing for the SAME sale date (bids appear a few days
@@ -9,8 +9,8 @@ Per lead:
   * Postponed: the same property listed for a LATER sale date moves Auction Date and Contract
     Deadline forward and marks the lead Postponed.
   * Foreclosure Status / Contract Deadline recomputed against today (see harris_status.py).
---datasift writes Starting Bid, Auction Date, Contract Deadline and Foreclosure Status onto the
-lead's DataSift record (dry run unless --commit).
+--crm writes Starting Bid, Auction Date, Contract Deadline and Foreclosure Status onto the
+lead's CRM record (HARRIS_CRM, see crm/) (dry run unless --commit).
 """
 import csv, json, re, sys
 from datetime import date
@@ -20,7 +20,6 @@ from harris_status import assess, parse_date
 SUFFIX = {"DRIVE": "DR", "LANE": "LN", "STREET": "ST", "ROAD": "RD", "COURT": "CT", "CIRCLE": "CIR", "AVENUE": "AVE",
           "BOULEVARD": "BLVD", "TRAIL": "TRL", "PLACE": "PL", "PARKWAY": "PKWY", "TERRACE": "TER", "HOLLOW": "HOLW"}
 SAME_SALE_DAYS = 3
-DATASIFT_FIELDS = ("Starting Bid", "Auction Date", "Contract Deadline", "Foreclosure Status")
 
 
 def addr_key(street):
@@ -77,58 +76,30 @@ def refresh(lead, by_num, today):
     return st["status"]
 
 
-def push_to_datasift(rows, commit, before):
-    """Write the day's changes back. Only leads whose Starting Bid, Auction Date, Contract Deadline or
-    Foreclosure Status moved get a call: a quiet day costs a handful of writes, not one per lead."""
-    from harris_upload import PatientApi
-    from datasift_api_upload import attach_to_record, field_index
-    api = PatientApi()
-    fields = field_index(api)
-    missing = [f for f in DATASIFT_FIELDS if f not in fields]
-    if missing:
-        print("DataSift: missing custom fields", missing)
-    changed = [r for r, b in zip(rows, before) if any((r.get(k) or "") != (b.get(k) or "") for k in DATASIFT_FIELDS)]
-    print(f"DataSift: {len(changed)} of {len(rows)} leads changed today")
-    for r in changed:
-        uuid = r.get("uuid")
-        if not uuid:
-            hit = api.call("/api/internal/property/", "POST", {"limit": 10, "offset": 0, "query": {"must": {
-                "property_type": "clean", "search": "address_prefix:" + r["Property Street Address"]}}},
-                headers={"x-http-method-override": "GET"})
-            hit = next((x for x in (hit.get("results") or hit.get("data") or [])
-                        if addr_key((x.get("address") or {}).get("street")) == addr_key(r["Property Street Address"])), None)
-            if not hit:
-                print(f"  not in DataSift yet: {r['Property Street Address']}")
-                continue
-            uuid = hit["uuid"]
-        values = []
-        for label in DATASIFT_FIELDS:
-            f, v = fields.get(label), r.get(label)
-            if not f:
-                continue
-            if not v:
-                if label == "Starting Bid":  # a postponement voids last month's bid
-                    values.append({"field_uuid": f["uuid"], "value": None})
-                continue
-            if f["field_type"] == "date":
-                v = parse_date(v).isoformat()
-            elif f["field_type"] == "select":
-                v = f["options"].get(v)
-            if v:
-                values.append({"field_uuid": f["uuid"], "value": v})
-        what = ", ".join(f"{k}={r.get(k) or '-'}" for k in DATASIFT_FIELDS)
+def push_to_crm(rows, commit, before):
+    """Write the day's changes back through the CRM connector (HARRIS_CRM, see crm/). Only leads whose
+    Starting Bid, Auction Date, Contract Deadline or Foreclosure Status moved get a call: a quiet day
+    costs a handful of writes, not one per lead."""
+    from crm import DAILY_FIELDS, DAILY_TAGS, get_crm
+    changed = [(r, b) for r, b in zip(rows, before) if any((r.get(k) or "") != (b.get(k) or "") for k in DAILY_FIELDS)]
+    print(f"CRM: {len(changed)} of {len(rows)} leads changed today")
+    if not changed:
+        return
+    crm = get_crm() if commit else None
+    for r, b in changed:
+        what = ", ".join(f"{k}={r.get(k) or '-'}" for k in DAILY_FIELDS)
+        if not r.get("id"):
+            print(f"  SKIP {r['Property Street Address']}: no CRM id (read the leads with harris_from_crm.py)")
+            continue
         if not commit:
             print(f"  DRY  {r['Property Street Address']}: {what}")
             continue
+        add = [t for t in DAILY_TAGS if t in r.get("Tags", "") and t not in b.get("Tags", "")]
         try:
-            api.call(f"/api/internal/property/{uuid}/custom-field/update-values/", "PATCH", values)
-            # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well
-            if parse_date(r.get("Auction Date")):
-                api.call(f"/api/internal/property/{uuid}/", "PATCH", {"auction_date": parse_date(r["Auction Date"]).isoformat()})
-            add = [t for t in ("Bid Posted", "Postponed") if t in r.get("Tags", "")]
-            if add:
-                attach_to_record(api, uuid, {"tags": add})
-            print(f"  OK   {r['Property Street Address']}: {what}")
+            problems = crm.update_lead(r["id"], {k: r.get(k) or "" for k in DAILY_FIELDS}, add)
+            print(f"  {'OK  ' if not problems else 'WARN'} {r['Property Street Address']}: {what}")
+            for p in problems:
+                print("       -", p)
         except Exception as e:
             print(f"  FAIL {r['Property Street Address']}: {str(e)[:200]}")
 
@@ -156,8 +127,8 @@ def main(leads_path, bids_path, out_path, *flags):
     listed = sum(bool(r.get("Bid Source")) for r in rows)
     bids = sum(bool(r.get("Starting Bid")) for r in rows)
     print(f"{len(rows)} leads | status {counts} | {listed} listed on an auction site | {bids} with a published bid")
-    if "--datasift" in flags:
-        push_to_datasift(rows, "--commit" in flags, before)
+    if "--crm" in flags or "--datasift" in flags:  # --datasift: the flag's name before connectors existed
+        push_to_crm(rows, "--commit" in flags, before)
 
 
 if __name__ == "__main__":
