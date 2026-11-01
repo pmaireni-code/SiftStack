@@ -39,8 +39,13 @@ def fetch(fips=HARRIS_FIPS, api=None):
     if not zips:
         raise SystemExit(f"Market Finder returned no ZIP metrics for FIPS {fips}")
     # The county as a whole: the reference a ZIP is compared with (days on market, median value / sale price)
-    cty = api.call(f"/api/internal/market-finder/paginated/?fips[]={fips}&offset=0&limit=1&geoGroup=county")
-    county = ((cty.get("data") or [{}])[0]).get("metrics") or {}
+    # Optional: the daily foreclosure grade never reads it, so a failure here must not stop that run
+    try:
+        cty = api.call(f"/api/internal/market-finder/paginated/?fips[]={fips}&offset=0&limit=1&geoGroup=county")
+        county = ((cty.get("data") or [{}])[0]).get("metrics") or {}
+    except Exception as e:
+        print(f"Market Finder county metrics unavailable: {str(e)[:120]}")
+        county = {}
     return {"fetched_at": datetime.now().isoformat(timespec="seconds"), "fips": fips, "buy_box": box, "zips": zips,
             "county": county}
 
