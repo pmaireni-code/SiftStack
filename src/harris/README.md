@@ -216,3 +216,46 @@ right after the upload, 53 a minute later. `POST /custom-fields/group/` takes `{
 Warm** = list Harris - Probate AND Lead Temperature Hot / Warm, in the same `custom_fields` grammar as the
 foreclosure preset. Verified by count: 5 Hot, 29 Warm (19 Cold) of the 53 leads, equal to the CSV. A count
 taken right after an upload can read low (the earlier 26 Warm was 6 records not yet indexed).
+
+## Senior equity (stage 3): owner 75+, free and clear, Market Check
+
+Leads to wholesale to investors: an older owner of a paid-off house the local investors buy. List
+**Harris - Senior Equity**, folder **Harris Senior Equity** with two presets: the whole list ("4 criterios")
+and **Priority** (vacant, or built 1975 or earlier with one owner on the deed).
+
+```bash
+python3 src/harris/hcad_senior.py work/hcad --download              # over-65 homesteads from HCAD's exemption amounts
+python3 src/harris/senior_sweep.py work/hcad/idx.tsv work/senior/sweep.json   # SiftMap search, read-only
+python3 src/harris/market_datasift.py work/senior/market.json        # ZIP + county Market Finder metrics
+(cd src/harris && python3 senior_to_datasift.py ../../work/senior/sweep.json ../../work/hcad/idx.tsv \
+    ../../work/hcad/senior_accts.json ../../work/senior/market.json ../../work/senior/leads.csv)
+(cd src/harris && python3 senior_upload.py ../../work/senior/leads.csv)            # dry run
+(cd src/harris && python3 senior_upload.py ../../work/senior/leads.csv --presets --commit)
+```
+
+**Senior** = HCAD over-65 homestead AND SiftMap owner age 75+. HCAD blanks the age and disability codes
+(OVR / DIS are on zero accounts) but not the amounts: an over-65 homestead carries the district's OVR
+amount on top of the residence homestead, folded into the RES row (`hcad_senior.py`). Most districts
+give over-65 and disability the same amount ("Over-65 or Disabled"); 42 do not, and there 95% are
+over-65. 28 of 40 probate decedents' homes carry the flag.
+
+**SiftMap search** (`map.reisift.io/properties/search/`, the user JWT) is free and adds nothing to the
+CRM. Keys verified by count delta: `extra_equity_percent_min`, `extra_owner_age_min`,
+`extra_year_built_max`, `beds_min/max`, `preset_owner_occupied`, `preset_vacant`. Ignored silently:
+`equity_percent_min`, `year_built_max`, `sqft_*`, `baths_*`, `owner_age_min`, `preset_senior`.
+`result_index` is the ROW OFFSET: paging it by 1 walked one row at a time (516 calls, 765 rows).
+
+**Market Check** (the operator's four ZIP criteria, every reference stored on the lead):
+1. ZIP median sale price below the ZIP median home value, and inside the middle 60%
+2. ZIP days on market at or under the county's (Market Finder county metrics, 58 days)
+3. lead value inside the middle 60% = Harris single-family values without the cheapest and dearest 20%
+   ($201,883 - $432,887 on the 2026 roll); free-and-clear leads also capped at $300,000
+4. ZIP investor purchases between the median ZIP (53) and the 90th percentile (162): solid, not the
+   most contested
+
+First build (2026-11-01): 23,575 SiftMap homes -> 2,918 leads in 17 ZIPs (693 Priority, 2,225 Standard;
+Hot 258, Warm 1,833, Cold 827). Left out: market check 15,487, no HCAD over-65 homestead 4,735, not on
+the HCAD roll 384, sq ft outside the buy box 51. Property address and Estimated Value are SiftMap's
+(HCAD appends townhome building/unit codes like `10840 BRIAR FOREST DR 10/45`; DataSift stores it as
+`# 10`). Temperature: +2 vacant, +1 each for 80+, single owner, built 1975 or earlier, HCAD
+"Over-65" (not "or Disabled"), ZIP selling 20%+ faster than the county.

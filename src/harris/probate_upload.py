@@ -22,58 +22,58 @@ FIELDS = [("Decedent Name", "text"), ("Executor", "text"), ("Executor Attorney",
 OPTIONS = {"Lead Temperature": ["Hot", "Warm", "Cold"]}
 
 
-def schema(crm, commit):
-    """Create what is missing: the custom-field group, the fields (selects with their options), the list."""
+def ensure_schema(crm, commit, list_name, groups, options):
+    """Create what is missing: each custom-field group, its fields (selects with their options), the list.
+    groups = {group label: [(field label, field type), ...]}. Fields that already exist (in any group) are reused."""
     api = crm.api
-    groups = api.call("/api/internal/custom-fields/group/?limit=999")
-    groups = groups if isinstance(groups, list) else groups.get("results") or []
-    gid = next((g.get("id") for g in groups if (g.get("title") or g.get("label")) == GROUP), None)
+    have = api.call("/api/internal/custom-fields/group/?limit=999")
+    have = have if isinstance(have, list) else have.get("results") or []
     todo = []
-    if not gid:
-        todo.append(f"custom-field group {GROUP!r}")
-        if commit:
-            # the group route wants label + entity_type ({"title": ...} 400s: both fields required)
-            g = api.call("/api/internal/custom-fields/group/", "POST", {"label": GROUP, "entity_type": "property"})
-            gid = g.get("id") or g.get("uuid")
-            if not gid:
-                raise SystemExit(f"group {GROUP!r} created but no id in the answer: {g}")
-    for label, ftype in FIELDS:
-        if label in crm.fields:
+    for group, fields in groups.items():
+        missing = [(l, t) for l, t in fields if l not in crm.fields]
+        if not missing:
             continue
-        todo.append(f"field {label!r} ({ftype}" + (f": {', '.join(OPTIONS[label])}" if label in OPTIONS else "") + ")")
-        if commit:
-            body = {"label": label, "field_type": ftype, "entity_type": "property", "group_id": gid}
-            if label in OPTIONS:  # a select is refused without its options in the same POST
-                body["options"] = [{"label": o, "value": o} for o in OPTIONS[label]]
-            api.call("/api/internal/custom-fields/", "POST", body)
+        gid = next((g.get("id") for g in have if (g.get("title") or g.get("label")) == group), None)
+        if not gid:
+            todo.append(f"custom-field group {group!r}")
+            if commit:
+                # the group route wants label + entity_type ({"title": ...} 400s: both fields required)
+                g = api.call("/api/internal/custom-fields/group/", "POST", {"label": group, "entity_type": "property"})
+                gid = g.get("id") or g.get("uuid")
+                if not gid:
+                    raise SystemExit(f"group {group!r} created but no id in the answer: {g}")
+        for label, ftype in missing:
+            todo.append(f"field {label!r} ({ftype}" + (f": {', '.join(options[label])}" if label in options else "") + ")")
+            if commit:
+                body = {"label": label, "field_type": ftype, "entity_type": "property", "group_id": gid}
+                if label in options:  # a select is refused without its options in the same POST
+                    body["options"] = [{"label": o, "value": o} for o in options[label]]
+                api.call("/api/internal/custom-fields/", "POST", body)
     lists = api.call("/api/internal/list/?limit=999")
     lists = lists if isinstance(lists, list) else lists.get("results") or []
-    if not any((x.get("title") or "").strip().lower() == LIST.lower() for x in lists):
-        todo.append(f"list {LIST!r}")
+    if not any((x.get("title") or "").strip().lower() == list_name.lower() for x in lists):
+        todo.append(f"list {list_name!r}")
         if commit:
-            api.call("/api/internal/list/", "POST", {"title": LIST})
+            api.call("/api/internal/list/", "POST", {"title": list_name})
     if commit:
         from datasift_api_upload import field_index
         crm.fields = field_index(api)
-        missing = [l for l, _ in FIELDS if l not in crm.fields]
+        missing = [l for fs in groups.values() for l, _ in fs if l not in crm.fields]
         print("schema: created " + ("; ".join(todo) or "nothing (all present)")
               + (f" | STILL MISSING {missing}" if missing else " | read back: all fields present"))
     return todo
 
 
-def main(path, *flags):
-    commit = "--commit" in flags
-    limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
-    rows = list(csv.DictReader(open(path, encoding="utf-8")))
-    crm = get_crm()
-    if "--schema" in flags:
-        schema(crm, commit)
-        return 0
-    todo = schema(crm, commit=False)
+def schema(crm, commit):
+    return ensure_schema(crm, commit, LIST, {GROUP: FIELDS}, OPTIONS)
+
+
+def upload(rows, crm, commit, list_name, label, schema_fn):
+    """Dry run (read-only lookups + payload preview) or commit, through the CRM connector."""
+    todo = schema_fn(crm, False)
     if todo and commit:
         raise SystemExit("schema missing (" + "; ".join(todo) + "): run --schema --commit first")
-    rows = rows[: limit or None]
-    print(f"[{'COMMIT' if commit else 'DRY RUN'}] {len(rows)} probate leads -> {crm.name}, list {LIST!r}")
+    print(f"[{'COMMIT' if commit else 'DRY RUN'}] {len(rows)} {label} leads -> {crm.name}, list {list_name!r}")
     if not commit:
         print("would create: " + ("; ".join(todo) or "nothing, schema in place"))
     new = existing = failed = 0
@@ -84,8 +84,8 @@ def main(path, *flags):
                 existing += bool(uuid)
                 new += not uuid
                 res = crm.upsert_lead(row, False)
-                print(f"  {'EXISTS' if uuid else 'NEW   '} [{row['Lead Temperature']:4}] {row['Property Street Address']}, "
-                      f"{row['Property ZIP Code']} | executor {row['Owner First Name']} {row['Owner Last Name']} | {row['Tags']}")
+                print(f"  {'EXISTS' if uuid else 'NEW   '} [{row.get('Lead Temperature', ''):4}] {row['Property Street Address']}, "
+                      f"{row['Property ZIP Code']} | contact {row['Owner First Name']} {row['Owner Last Name']} | {row['Tags']}")
                 if i == 1:
                     print("    payload preview:\n      " + res["preview"].replace("\n", "\n      "))
                 continue
@@ -103,6 +103,17 @@ def main(path, *flags):
     else:
         print(f"\nfailed={failed}")
     return 1 if failed else 0
+
+
+def main(path, *flags):
+    commit = "--commit" in flags
+    limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    crm = get_crm()
+    if "--schema" in flags:
+        schema(crm, commit)
+        return 0
+    return upload(rows[: limit or None], crm, commit, LIST, "probate", schema)
 
 
 if __name__ == "__main__":

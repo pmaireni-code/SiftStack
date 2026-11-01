@@ -27,7 +27,12 @@ FIELDS = {"Starting Bid": "Starting Bid", "Original Loan Amount": "Original Loan
           "Decedent Name": "Decedent Name", "Executor": "Executor", "Executor Attorney": "Executor Attorney",
           "Probate Open Date": "Probate Open Date", "Date of Death": "Date of Death",
           "Probate Case Number": "Probate Case Number", "Probate Type": "Probate Type",
-          "Lead Temperature": "Lead Temperature", "Temperature Notes": "Temperature Notes"}
+          "Lead Temperature": "Lead Temperature", "Temperature Notes": "Temperature Notes",
+          # Senior equity list (senior_to_datasift.py) and its Market Check
+          **{k: k for k in ("Senior Tier", "Owner Age", "Senior Exemption", "Equity Percent", "Estimated Debt",
+                            "Market Check", "ZIP Median Sale Price", "ZIP Median Home Value", "ZIP Days on Market",
+                            "ZIP Investor Transactions", "County Median Home Value", "County Days on Market",
+                            "Price Band 60", "Investor Volume Band")}}
 # Lead column -> native property field (names as the record detail returns them)
 NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqFt": "sqft", "Parcel ID": "apn",
           "Auction Date": "auction_date"}  # DataSift's own auction_date, so native filters see the sale too
