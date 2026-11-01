@@ -41,9 +41,11 @@ class CRM:
         Property ZIP Code, Foreclosure Date, Auction Date, Contract Deadline, Foreclosure Status,
         Starting Bid, Tags, Deal Grade, Deal Notes, ZIP Investor Activity. with_facts adds what the
         Deal Grade needs: Equity Percent, Estimated Value, Structure Type, Living SqFt, Bedrooms,
-        Bathrooms, Year Built, Latitude, Longitude, Original Loan Amount, Loan Date. Read-only."""
+        Bathrooms, Year Built, Latitude, Longitude, Original Loan Amount, Loan Date, Property Temperature
+        (the CRM's own hot/warm/cold marker, 0-5). Read-only."""
         raise NotImplementedError
 
     def update_lead(self, lead_id: str, values: dict, add_tags: list) -> list:
-        """Write the given lead columns (an empty value clears the field) and add tags. Returns problems."""
+        """Write the given lead columns (an empty value clears the field) and add tags. A
+        "Property Temperature" value sets the CRM's own hot/warm/cold marker. Returns problems."""
         raise NotImplementedError

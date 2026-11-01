@@ -211,6 +211,7 @@ class DataSiftCRM(CRM):
                         "Equity Percent": num(d.get("equity_percent")), "Estimated Value": num(d.get("estimate_value")),
                         "Structure Type": d.get("structure_type") or "", "Living SqFt": num(d.get("sqft")),
                         "Bedrooms": num(d.get("bedrooms")), "Bathrooms": num(d.get("bathrooms")), "Year Built": num(d.get("year")),
+                        "Property Temperature": num(d.get("hotness")),
                         "Latitude": num((d.get("address") or {}).get("latitude")),
                         "Longitude": num((d.get("address") or {}).get("longitude")),
                         "Original Loan Amount": num(vals.get("Original Loan Amount")),
@@ -230,6 +231,11 @@ class DataSiftCRM(CRM):
         if parse_date(values.get("Auction Date")):
             self.api.call(f"/api/internal/property/{lead_id}/", "PATCH",
                           {"auction_date": parse_date(values["Auction Date"]).isoformat()})
+        # DataSift's own "Property Temperature" (the snowflake/flame): a PATCH of hotness is accepted
+        # and silently ignored; the app saves it through its own route. 0 = cold (default), 3 warm, 5 hot
+        if values.get("Property Temperature") not in (None, ""):
+            self.api.call(f"/api/internal/property/{lead_id}/hotness/", "POST",
+                          {"hotness": int(float(values["Property Temperature"]))})
         if add_tags:
             attach_to_record(self.api, lead_id, {"tags": list(add_tags)})
         return problems

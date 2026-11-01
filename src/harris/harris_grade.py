@@ -34,6 +34,9 @@ BATHS_MAX = 4
 VERIFY_YEARS = 5
 VERIFY_LTV = 0.85
 GRADE_FIELDS = ("Deal Grade", "Deal Notes", "ZIP Investor Activity")
+# DataSift's own temperature marker, set ONCE: when a lead is graded for the first time and nobody has
+# touched its temperature yet (still 0, cold). After that it is the operator's to change (agreed 2026-11-01)
+INITIAL_TEMPERATURE = {"Hot": 5, "Warm": 3}
 FLOOD_TAG = "Flood Zone"  # in FEMA's 100-year floodplain; a note and a tag, never a grade change
 NFHL = "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query"
 
@@ -143,6 +146,11 @@ def main(market_path, out_path, *flags):
     if "--crm" not in flags:
         return
     commit = "--commit" in flags
+    for l, b in zip(leads, before):
+        first_grade = not (b.get("Deal Grade") or "") and l.get("Deal Grade")
+        untouched = num(l.get("Property Temperature")) in (None, 0.0)
+        if first_grade and untouched and l["Deal Grade"] in INITIAL_TEMPERATURE:
+            l["_temperature"] = INITIAL_TEMPERATURE[l["Deal Grade"]]
     changed = [l for l, b in zip(leads, before) if any((l.get(k) or "") != (b.get(k) or "") for k in GRADE_FIELDS)]
     print(f"CRM: {len(changed)} leads with a new grade")
     for l in changed:
@@ -152,7 +160,10 @@ def main(market_path, out_path, *flags):
             continue
         try:
             add = [FLOOD_TAG] if l.get("_flood_tag") and FLOOD_TAG not in (l.get("Tags") or "") else []
-            problems = crm.update_lead(l["id"], {k: l.get(k) or "" for k in GRADE_FIELDS}, add)
+            vals = {k: l.get(k) or "" for k in GRADE_FIELDS}
+            if l.get("_temperature"):
+                vals["Property Temperature"] = l["_temperature"]
+            problems = crm.update_lead(l["id"], vals, add)
             print(f"  {'OK  ' if not problems else 'WARN'} {l['Property Street Address']}: {l['Deal Grade']}")
             for p in problems:
                 print("       -", p)

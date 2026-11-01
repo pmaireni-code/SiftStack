@@ -136,3 +136,13 @@ options of one field are OR, fields are AND. Verified by count delta (308 -> 90 
 `"<field uuid>": [...]` key or `customFields` is silently ignored, and a list instead of a dict 400s.
 A preset carries no Clean/Incomplete split: the Records view applies that, so 5 of the 95 sit under
 Incomplete.
+
+## DataSift Property Temperature (the snowflake / flame)
+
+DataSift's own temperature marker is MANUAL by design (help article "Property Temperature
+Explained"); every record starts cold (`hotness` 0). The grader sets it ONCE, when a lead is graded
+for the first time and its temperature is still 0: Hot -> 5, Warm -> 3. Not Viable and Needs Data stay
+cold. After that it is never touched again, so the operator's own call wins (operator's choice,
+2026-11-01). Contract: `PATCH /property/{uuid}/ {"hotness": n}` is accepted and silently ignored;
+the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
+Records -> Add new filter block -> Deal Temperature.
