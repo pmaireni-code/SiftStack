@@ -32,7 +32,11 @@ def schema(crm, commit):
     if not gid:
         todo.append(f"custom-field group {GROUP!r}")
         if commit:
-            gid = api.call("/api/internal/custom-fields/group/", "POST", {"title": GROUP}).get("id")
+            # the group route wants label + entity_type ({"title": ...} 400s: both fields required)
+            g = api.call("/api/internal/custom-fields/group/", "POST", {"label": GROUP, "entity_type": "property"})
+            gid = g.get("id") or g.get("uuid")
+            if not gid:
+                raise SystemExit(f"group {GROUP!r} created but no id in the answer: {g}")
     for label, ftype in FIELDS:
         if label in crm.fields:
             continue
