@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crm import get_crm  # noqa: E402
 
 COLS = ["id", "Property Street Address", "Property ZIP Code", "Foreclosure Date", "Auction Date", "Contract Deadline",
-        "Foreclosure Status", "Starting Bid", "Tags"]
+        "Foreclosure Status", "Starting Bid", "Tags", "Deal Grade", "Deal Notes", "ZIP Investor Activity"]
 
 
 def main(out_path, *flags):
