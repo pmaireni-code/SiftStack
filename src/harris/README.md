@@ -146,3 +146,57 @@ cold. After that it is never touched again, so the operator's own call wins (ope
 2026-11-01). Contract: `PATCH /property/{uuid}/ {"hotness": n}` is accepted and silently ignored;
 the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
 Records -> Add new filter block -> Deal Temperature.
+
+## Probate (stage 2, in test: nothing written to the CRM yet)
+
+New probate cases -> the decedent's Harris property -> DataSift list **Harris - Probate**, with the
+APPLICANT (would-be executor / administrator) as the contact. All free sources.
+
+```bash
+node src/harris/probate_cases.js 10/26/2026 10/30/2026 work/probate/cases.json       # clerk, by file date
+python3 src/harris/probate_match.py work/probate/cases.json work/hcad/idx.tsv work/probate/match.csv
+python3 src/harris/market_datasift.py work/probate/market.json                        # buy box (read-only)
+(cd src/harris && python3 probate_to_datasift.py ../../work/probate/match.csv ../../work/probate/leads.csv \
+    --market ../../work/probate/market.json --excluded ../../work/probate/excluded.csv)
+(cd src/harris && python3 probate_upload.py ../../work/probate/leads.csv)             # dry run: schema plan + every lead
+```
+
+**The clerk** (`CourtSearch.aspx?CaseType=Probate`, no login, no CAPTCHA) lists 200 cases a page.
+Each row lazy-loads two panels with `GET CourtCaseDetail.aspx?ID=<token>`: events (the "Case
+Initiated" comment carries `DOD: MM/DD/YYYY`) and parties (Applicant with mailing address and
+attorney + phone; Deceased, with an address on ~10% of cases). About 147 cases a week, 128 of them
+decedent estates once guardianships, wills for safekeeping, trusts and the like are dropped.
+
+**Matching** (measured on 128 cases filed 10/26-10/30/2026): 59 cases give a property (high or
+medium), 17 are ambiguous, 52 have no Harris home in the decedent's name. A PERSON on the roll is a
+name plus a mailing address, so name hits are grouped by mailing address and a group is chosen by
+an anchor (the decedent's or applicant's address) or by being the only one. Rules each learned
+from a wrong match:
+- An address match needs the decedent's FIRST name too: a decedent's address was her son's house.
+- A middle initial breaks a tie only on a rare name (`MAX_NAMESAKES = 5`): CHARLES M JOHNSON had
+  21 namesakes and the one "M" with a house need not be him.
+- Address keys carry the ZIP and a second street word: `2806 KINGS FOREST` vs `2806 KINGS RETREAT`.
+- Keep `&` in owner names: `SCHROEDER ALBERT & MARYANN` read MARYANN as Albert's middle name.
+- HCAD hides the owner on ~37,600 protected accounts (`CURRENT OWNER`); a decedent's home can be
+  one, found through the rentals that mail their tax bills to it.
+- Trusts are written FIRST LAST (`VITO J GAUDIANO JR TRUST`) and indexed separately.
+
+**Left out:** low / no-confidence matches, and surviving-spouse homes (operator, 2026-11-01): the
+HCAD owner line names a co-owner who is not a decedent in the batch and the home is owner-occupied.
+A rental the couple owned stays a lead. 12 homes a week.
+
+**Lead Temperature** (Hot / Warm / Cold, reasons in Temperature Notes): points for an out-of-state
+heir (+2) or one outside the Houston area (+1); nobody the estate relies on living there (rental,
+decedent living elsewhere, or sole owner gone and the heir elsewhere) (+1); 2+ Harris properties
+(+1); no will (+1); death 12+ months before the filing (+1); built before 1980 (+1). Hot = 4+ and
+inside the Market Finder buy box (value, sq ft); Warm = 2-3 or 4+ outside it; Cold = 0-1. Sets
+DataSift's own temperature on first upload (Hot 5, Warm 3) only while the record is still cold.
+First week: Hot 5, Warm 29, Cold 19.
+
+**CRM:** probate columns map to custom fields Decedent Name, Executor, Executor Attorney, Probate
+Open Date, Date of Death, Probate Case Number, Probate Type, Lead Temperature (select) and
+Temperature Notes, in a "Probate" group that `probate_upload.py --schema --commit` creates. A house
+already in DataSift keeps its owner (`Keep Owner On Existing`): only list, tags, fields and the
+note are added, since `create_property` would otherwise PATCH the owner. The note is skipped when
+its `Note Key` (`probate case <n>`) is already on the record. `find_lead` searches clean AND
+incomplete records.

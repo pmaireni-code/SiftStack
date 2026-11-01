@@ -36,6 +36,11 @@ class CRM:
         """
         raise NotImplementedError
 
+    def find_lead(self, row: dict) -> str:
+        """Id of the record already at the row's property address, or "". Read-only. Optional: the
+        probate dry run uses it to say which leads would land on an existing record."""
+        return ""
+
     def read_leads(self, list_name: str, with_facts: bool = False) -> list:
         """Every lead on the list, as dicts carrying "id" plus at least: Property Street Address,
         Property ZIP Code, Foreclosure Date, Auction Date, Contract Deadline, Foreclosure Status,

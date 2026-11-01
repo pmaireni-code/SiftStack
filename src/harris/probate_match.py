@@ -80,7 +80,8 @@ def party(case, role):
     city = next((l for l in lines[1:] if re.search(r"\b[A-Z]{2}\s+\d{5}", l)), "")
     m = re.search(r"^(.*?)\s+([A-Z]{2})\s+(\d{5})", city)
     return {"name": lines[0], "street": street, "city": m.group(1) if m else "", "state": m.group(2) if m else "",
-            "zip": m.group(3) if m else "", "attorney": (p.get("attorney") or [""])[0]}
+            "zip": m.group(3) if m else "", "attorney": (p.get("attorney") or [""])[0],
+            "attorney_phone": (re.search(r"Phone\s*([\d-]{10,})", " ".join(p.get("attorney") or [])) or [None, ""])[1]}
 
 
 def date_of_death(case):
@@ -243,7 +244,7 @@ def main(cases_path, idx_path, out_path):
         res.update({"file_date": c["file_date"], "type": c["type"], "subtype": c["subtype"], "dod": date_of_death(c),
                     "applicant": app["name"] if app else "", "applicant_street": app["street"] if app else "",
                     "applicant_city": app["city"] if app else "", "applicant_state": app["state"] if app else "",
-                    "applicant_zip": app["zip"] if app else "", "attorney": app["attorney"] if app else "",
+                    "applicant_zip": app["zip"] if app else "", "attorney": app["attorney"] if app else "", "attorney_phone": app["attorney_phone"] if app else "",
                     "decedent_street": dec["street"] if dec else ""})
         for r in props or [None]:
             row = dict(res)

@@ -22,7 +22,12 @@ from .base import CRM  # noqa: E402
 FIELDS = {"Starting Bid": "Starting Bid", "Original Loan Amount": "Original Loan Amount", "Loan Date": "Loan Date",
           "Lender": "Lender", "Trustee Firm": "Trustee Firm", "Auction Date": "Auction Date",
           "Contract Deadline": "Contract Deadline", "Foreclosure Status": "Foreclosure Status",
-          "Deal Grade": "Deal Grade", "Deal Notes": "Deal Notes", "ZIP Investor Activity": "ZIP Investor Activity"}
+          "Deal Grade": "Deal Grade", "Deal Notes": "Deal Notes", "ZIP Investor Activity": "ZIP Investor Activity",
+          # Probate (probate_to_datasift.py); a foreclosure row carries none of these columns, so nothing changes for it
+          "Decedent Name": "Decedent Name", "Executor": "Executor", "Executor Attorney": "Executor Attorney",
+          "Probate Open Date": "Probate Open Date", "Date of Death": "Date of Death",
+          "Probate Case Number": "Probate Case Number", "Probate Type": "Probate Type",
+          "Lead Temperature": "Lead Temperature", "Temperature Notes": "Temperature Notes"}
 # Lead column -> native property field (names as the record detail returns them)
 NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqFt": "sqft", "Parcel ID": "apn",
           "Auction Date": "auction_date"}  # DataSift's own auction_date, so native filters see the sale too
@@ -134,6 +139,21 @@ class DataSiftCRM(CRM):
                 bad.append(f"{v['_label']}: sent {v['_raw']!r}, reads empty")
         return bad
 
+    def find_lead(self, row):
+        """uuid of the record already at this property address, or "". READ-ONLY. Searches clean AND
+        incomplete records (datasift_api_upload.find_property only sees clean ones)."""
+        street = (row.get("Property Street Address") or "").strip()
+        norm = lambda v: re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+        for ptype in ("clean", "incomplete"):
+            res = self.api.call("/api/internal/property/", "POST", {"limit": 10, "offset": 0, "query": {"must": {
+                "property_type": ptype, "search": "address_prefix:" + street}}}, headers={"x-http-method-override": "GET"})
+            for rec in res.get("results") or res.get("data") or []:
+                a = rec.get("address") or {}
+                z = str(a.get("zip5") or a.get("postal_code") or "")[:5]
+                if norm(a.get("street")) == norm(street) and (not z or z == (row.get("Property ZIP Code") or "")[:5]):
+                    return rec["uuid"]
+        return ""
+
     def upsert_lead(self, row, commit):
         problems = []
         prop = build_property(row)
@@ -143,7 +163,14 @@ class DataSiftCRM(CRM):
         if not commit:
             return {"id": "", "created": False, "problems": problems,
                     "preview": f"payload: {prop}\nnative: {native}\ncustom: {[(v['_label'], v['value']) for v in values]}"}
-        res = create_property(self.api, prop)
+        # "Keep Owner On Existing": a record that already exists (a foreclosure lead on the same house) keeps
+        # its owner; only lists, tags, fields and the note are added. create_property would PATCH the owner
+        existing = self.find_lead(row) if row.get("Keep Owner On Existing") == "Yes" else ""
+        if existing:
+            attach_to_record(self.api, existing, {k: v for k, v in prop.items() if k != "owner"})
+            res = {"uuid": existing, "existing": True}
+        else:
+            res = create_property(self.api, prop)
         uuid = res["uuid"]
         if native:
             try:
@@ -156,10 +183,20 @@ class DataSiftCRM(CRM):
         if row.get("Notes"):
             # add-notes APPENDS, so a re-run would stack the same note again: skip when this
             # notice's doc id is already in the record's notes
-            doc = row["Notes"].split("foreclosure notice ", 1)[1].split()[0] if "foreclosure notice " in row["Notes"] else ""
+            doc = row.get("Note Key") or (row["Notes"].split("foreclosure notice ", 1)[1].split()[0] if "foreclosure notice " in row["Notes"] else "")
             have = (self.api.call(f"/api/internal/property/{uuid}/").get("notes") or "") if res.get("existing") else ""
             if not doc or doc not in have:
                 self.api.call(f"/api/internal/property/{uuid}/add-notes/", "POST", {"notes": row["Notes"][:2000]})
+        # DataSift's own temperature marker (snowflake / flame): set from the lead only while the record is
+        # still cold (0), so an operator's call on an existing record is never overwritten
+        temp = row.get("Property Temperature")
+        if temp not in (None, ""):
+            rec = self.api.call(f"/api/internal/property/{uuid}/")
+            if not rec.get("hotness"):
+                self.api.call(f"/api/internal/property/{uuid}/hotness/", "POST", {"hotness": int(float(temp))})
+                got = self.api.call(f"/api/internal/property/{uuid}/").get("hotness")
+                if int(got or 0) != int(float(temp)):
+                    problems.append(f"temperature: sent {temp}, reads {got}")
         problems += self._read_back(uuid, values, native, row)
         return {"id": uuid, "created": not res.get("existing"), "problems": problems}
 
