@@ -211,3 +211,8 @@ incomplete), every probate field filled, Lead Temperature equal to the CSV, Data
 Warm 3 / Cold 0, no duplicated note. The list search lags the writes by up to a minute: 48 of 53 showed
 right after the upload, 53 a minute later. `POST /custom-fields/group/` takes `{"label", "entity_type"}`;
 `{"title"}` 400s.
+
+**Filter presets** (folder **Harris Probate**, 2026-11-01): **Harris - Probate Hot** and **Harris - Probate
+Warm** = list Harris - Probate AND Lead Temperature Hot / Warm, in the same `custom_fields` grammar as the
+foreclosure preset. Verified by count: 5 Hot, 29 Warm (19 Cold) of the 53 leads, equal to the CSV. A count
+taken right after an upload can read low (the earlier 26 Warm was 6 records not yet indexed).
