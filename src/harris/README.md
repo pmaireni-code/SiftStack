@@ -126,3 +126,13 @@ taken in the last 5 years for 85%+ of the value. Flood: FEMA NFHL zone at the re
 Deal Notes, plus the `Flood Zone` tag in the 100-year floodplain; never a grade change. FEMA's point
 query must send the geometry as JSON (`{"x":..,"y":..,"spatialReference":{"wkid":4326}}`); the
 `x,y` shorthand times out with a 500. Network: `hazards.fema.gov`.
+
+## DataSift filter preset
+
+Folder **Harris Foreclosure**, preset **Harris - Hot (Active, Urgent, Postponed)**: list Harris -
+Foreclosure, Deal Grade Hot, Foreclosure Status Active / Urgent / Postponed (95 leads on 2026-11-01).
+Custom fields filter as `"custom_fields": {"<field uuid>": ["<option uuid>", ...]}` inside `must`:
+options of one field are OR, fields are AND. Verified by count delta (308 -> 90 clean); a bare
+`"<field uuid>": [...]` key or `customFields` is silently ignored, and a list instead of a dict 400s.
+A preset carries no Clean/Incomplete split: the Records view applies that, so 5 of the 95 sit under
+Incomplete.
