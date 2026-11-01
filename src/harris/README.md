@@ -147,7 +147,7 @@ cold. After that it is never touched again, so the operator's own call wins (ope
 the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
 Records -> Add new filter block -> Deal Temperature.
 
-## Probate (stage 2, in test: nothing written to the CRM yet)
+## Probate (stage 2, live 2026-11-01: 53 leads uploaded and read back)
 
 New probate cases -> the decedent's Harris property -> DataSift list **Harris - Probate**, with the
 APPLICANT (would-be executor / administrator) as the contact. All free sources.
@@ -159,6 +159,10 @@ python3 src/harris/market_datasift.py work/probate/market.json                  
 (cd src/harris && python3 probate_to_datasift.py ../../work/probate/match.csv ../../work/probate/leads.csv \
     --market ../../work/probate/market.json --excluded ../../work/probate/excluded.csv)
 (cd src/harris && python3 probate_upload.py ../../work/probate/leads.csv)             # dry run: schema plan + every lead
+(cd src/harris && python3 probate_upload.py ../../work/probate/leads.csv --limit 1 --commit)   # one first, read it back
+
+# Every Monday, all of the above for cases filed in the last 9 days (scheduled task):
+bash src/harris/run_weekly_probate.sh [--dry-run]
 ```
 
 **The clerk** (`CourtSearch.aspx?CaseType=Probate`, no login, no CAPTCHA) lists 200 cases a page.
@@ -200,3 +204,10 @@ already in DataSift keeps its owner (`Keep Owner On Existing`): only list, tags,
 note are added, since `create_property` would otherwise PATCH the owner. The note is skipped when
 its `Note Key` (`probate case <n>`) is already on the record. `find_lead` searches clean AND
 incomplete records.
+
+First live upload (2026-11-01, cases filed 10/26-10/30): schema created and read back, 1 lead read back
+field by field, then the other 52. Verified by reading the whole list back: 53 records (52 clean, 1
+incomplete), every probate field filled, Lead Temperature equal to the CSV, DataSift temperature Hot 5 /
+Warm 3 / Cold 0, no duplicated note. The list search lags the writes by up to a minute: 48 of 53 showed
+right after the upload, 53 a minute later. `POST /custom-fields/group/` takes `{"label", "entity_type"}`;
+`{"title"}` 400s.
