@@ -16,12 +16,13 @@ from datasift_api_upload import Api, ApiError, attach_to_record, build_property,
 
 from harris_status import parse_date  # noqa: E402
 
-from .base import CRM, DAILY_FIELDS  # noqa: E402
+from .base import CRM  # noqa: E402
 
 # Lead column -> DataSift custom-field label (the account's "Foreclosure" group)
 FIELDS = {"Starting Bid": "Starting Bid", "Original Loan Amount": "Original Loan Amount", "Loan Date": "Loan Date",
           "Lender": "Lender", "Trustee Firm": "Trustee Firm", "Auction Date": "Auction Date",
-          "Contract Deadline": "Contract Deadline", "Foreclosure Status": "Foreclosure Status"}
+          "Contract Deadline": "Contract Deadline", "Foreclosure Status": "Foreclosure Status",
+          "Deal Grade": "Deal Grade", "Deal Notes": "Deal Notes", "ZIP Investor Activity": "ZIP Investor Activity"}
 # Lead column -> native property field (names as the record detail returns them)
 NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqFt": "sqft", "Parcel ID": "apn",
           "Auction Date": "auction_date"}  # DataSift's own auction_date, so native filters see the sale too
@@ -163,7 +164,7 @@ class DataSiftCRM(CRM):
         return {"id": uuid, "created": not res.get("existing"), "problems": problems}
 
     # ---- reading
-    def read_leads(self, list_name):
+    def read_leads(self, list_name, with_facts=False):
         lists = self.api.call("/api/internal/list/?limit=999")
         lists = lists if isinstance(lists, list) else lists.get("results") or []
         lst = next((x for x in lists if (x.get("title") or "").strip().lower() == list_name.lower()), None)
@@ -174,10 +175,10 @@ class DataSiftCRM(CRM):
         # DataSift files a record it considers short of data (a company owner, a missing mailing line)
         # under "incomplete" instead of "clean"; a search on one type silently skips the other
         for ptype in ("clean", "incomplete"):
-            out += self._read_list(lst["uuid"], ptype, options)
+            out += self._read_list(lst["uuid"], ptype, options, with_facts)
         return out
 
-    def _read_list(self, list_uuid, ptype, options):
+    def _read_list(self, list_uuid, ptype, options, with_facts):
         out, offset = [], 0
         while True:
             res = self.api.call("/api/internal/property/", "POST", {"limit": 100, "offset": offset, "query": {"must": {
@@ -198,7 +199,20 @@ class DataSiftCRM(CRM):
                     "Contract Deadline": _iso_to_us(vals.get("Contract Deadline")),
                     "Foreclosure Status": options.get(status, status or ""),
                     "Starting Bid": str(int(float(bid))) if bid not in (None, "") else "",
-                    "Tags": ", ".join(t for t in tags if t)})
+                    "Tags": ", ".join(t for t in tags if t),
+                    "Deal Grade": options.get(vals.get("Deal Grade"), vals.get("Deal Grade") or ""),
+                    "Deal Notes": vals.get("Deal Notes") or "",
+                    "ZIP Investor Activity": options.get(vals.get("ZIP Investor Activity"), vals.get("ZIP Investor Activity") or "")})
+                if with_facts:
+                    # Search rows carry no property facts: the record detail does
+                    d = self.api.call(f"/api/internal/property/{rec['uuid']}/")
+                    num = lambda v: "" if v in (None, "") else str(v)
+                    out[-1].update({
+                        "Equity Percent": num(d.get("equity_percent")), "Estimated Value": num(d.get("estimate_value")),
+                        "Structure Type": d.get("structure_type") or "", "Living SqFt": num(d.get("sqft")),
+                        "Bedrooms": num(d.get("bedrooms")), "Bathrooms": num(d.get("bathrooms")), "Year Built": num(d.get("year")),
+                        "Original Loan Amount": num(vals.get("Original Loan Amount")),
+                        "Loan Date": _iso_to_us(vals.get("Loan Date"))})
             offset += len(page)
             # Page until a short page: the response's count lags the real membership
             if len(page) < 100:
@@ -207,7 +221,7 @@ class DataSiftCRM(CRM):
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
-        cvals = self._custom_values(values, problems, only=DAILY_FIELDS)
+        cvals = self._custom_values(values, problems, only=tuple(values))
         self.api.call(f"/api/internal/property/{lead_id}/custom-field/update-values/", "PATCH",
                       [{"field_uuid": v["field_uuid"], "value": v["value"]} for v in cvals])
         # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well

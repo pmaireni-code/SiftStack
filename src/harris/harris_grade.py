@@ -1,0 +1,124 @@
+"""Deal Grade for every open Harris foreclosure lead: is buying it before the auction a viable deal?
+
+    python3 harris_grade.py <market.json> <out.csv> [--crm [--commit]]
+
+Reads the leads (with property facts) through the CRM connector, grades the open ones (everything
+but Auction Passed) against today's Market Finder data, and with --crm writes back only the leads
+whose grade, notes or ZIP activity changed (dry run unless --commit).
+
+Rules (agreed with the operator 2026-11-01):
+  Not Viable  equity under EQUITY_MIN: the sale price cannot pay off the loan plus costs
+  Needs Data  no equity figure to judge on
+  Hot         equity >= EQUITY_HOT, single family, inside the investor buy box, ZIP not in the
+              bottom third for investor activity, and no Verify Equity flag
+  Warm        everything else at or above EQUITY_MIN; Deal Notes says what kept it from Hot
+Buy box = DataSift's Recommended Filters for the county with two adjustments: no year-built cap
+(post-2010 homes are 21% of Harris single-family stock and 35% of these leads, and the equity rule
+already catches the high-LTV new loan) and baths up to 4 (a 3,302 sq ft two-story is usually 3.5).
+Equity is DataSift's estimate (value minus estimated loan balances); it excludes arrears and
+foreclosure fees, so EQUITY_HOT carries that margin. Verify Equity: a loan taken in the last
+VERIFY_YEARS for most of the value cannot carry this much equity yet.
+"""
+import csv, json, os, sys
+from datetime import date
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harris_status import parse_date  # noqa: E402
+
+EQUITY_HOT = 40.0
+EQUITY_MIN = 25.0
+BATHS_MAX = 4
+VERIFY_YEARS = 5
+VERIFY_LTV = 0.85
+GRADE_FIELDS = ("Deal Grade", "Deal Notes", "ZIP Investor Activity")
+
+
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def zip_tiers(zips):
+    """ZIP -> (High/Medium/Low, investor transactions over 6 months), by thirds within the county."""
+    tx = {z: m.get("num_investor_transactions") or 0 for z, m in zips.items()}
+    ranked = sorted(tx.values())
+    lo, hi = ranked[len(ranked) // 3], ranked[2 * len(ranked) // 3]
+    return {z: ("High" if v >= hi else "Medium" if v >= lo else "Low", int(v)) for z, v in tx.items()}
+
+
+def grade(lead, box, tiers, today):
+    notes = []
+    eq, value = num(lead.get("Equity Percent")), num(lead.get("Estimated Value"))
+    tier, tx = tiers.get((lead.get("Property ZIP Code") or "")[:5], ("", None))
+    if tier:
+        notes.append(f"ZIP {lead['Property ZIP Code'][:5]}: {tx} investor buys in 6 mo ({tier})")
+    if eq is None:
+        return "Needs Data", ["no equity estimate in DataSift"] + notes, tier
+    notes.insert(0, f"equity {eq:.0f}%")
+    if eq < EQUITY_MIN:
+        return "Not Viable", notes, tier
+    why = []
+    if "single family" not in (lead.get("Structure Type") or "").lower():
+        why.append(f"not single family ({lead.get('Structure Type') or 'unknown type'})")
+    checks = [("Living SqFt", box["living_area_sqft_low"], box["living_area_sqft_high"], "sq ft"),
+              ("Bedrooms", box["bedrooms_count_low"], box["bedrooms_count_high"], "beds"),
+              ("Bathrooms", box["bath_count_low"], BATHS_MAX, "baths"),
+              ("Estimated Value", box["property_value_low"], box["property_value_high"], "value")]
+    for col, low, high, label in checks:
+        v = num(lead.get(col))
+        if v is not None and not (low <= v <= high):
+            why.append(f"{label} {v:,.0f} outside {low:,.0f}-{high:,.0f}")
+    if tier == "Low":
+        why.append("low investor activity in the ZIP")
+    loan, loan_d = num(lead.get("Original Loan Amount")), parse_date(lead.get("Loan Date"))
+    if loan and value and loan_d and (today - loan_d).days < VERIFY_YEARS * 365 and loan >= VERIFY_LTV * value:
+        why.append(f"VERIFY EQUITY: ${loan:,.0f} loan from {loan_d:%m/%Y} vs ${value:,.0f} value")
+    if eq < EQUITY_HOT:
+        why.insert(0, f"equity under {EQUITY_HOT:.0f}%")
+    return ("Hot" if not why else "Warm"), notes + why, tier
+
+
+def main(market_path, out_path, *flags):
+    from crm import get_crm
+    market = json.load(open(market_path))
+    tiers = zip_tiers(market["zips"])
+    crm = get_crm()
+    leads = crm.read_leads("Harris - Foreclosure", with_facts=True)
+    today = date.today()
+    before = [dict(l) for l in leads]
+    counts = {}
+    for l in leads:
+        if l.get("Foreclosure Status") == "Auction Passed":
+            continue  # closed: keep its last grade
+        g, notes, tier = grade(l, market["buy_box"], tiers, today)
+        l["Deal Grade"], l["Deal Notes"], l["ZIP Investor Activity"] = g, "; ".join(notes)[:500], tier
+        counts[g] = counts.get(g, 0) + 1
+    cols = list(dict.fromkeys(k for l in leads for k in l))
+    with open(out_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        w.writerows(leads)
+    print(f"graded {sum(counts.values())} open leads: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    if "--crm" not in flags:
+        return
+    commit = "--commit" in flags
+    changed = [l for l, b in zip(leads, before) if any((l.get(k) or "") != (b.get(k) or "") for k in GRADE_FIELDS)]
+    print(f"CRM: {len(changed)} leads with a new grade")
+    for l in changed:
+        what = f"{l['Deal Grade']} | {l['Deal Notes'][:90]}"
+        if not commit:
+            print(f"  DRY  {l['Property Street Address']}: {what}")
+            continue
+        try:
+            problems = crm.update_lead(l["id"], {k: l.get(k) or "" for k in GRADE_FIELDS}, [])
+            print(f"  {'OK  ' if not problems else 'WARN'} {l['Property Street Address']}: {l['Deal Grade']}")
+            for p in problems:
+                print("       -", p)
+        except Exception as e:
+            print(f"  FAIL {l['Property Street Address']}: {str(e)[:200]}")
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:])

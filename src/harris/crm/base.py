@@ -36,12 +36,14 @@ class CRM:
         """
         raise NotImplementedError
 
-    def read_leads(self, list_name: str) -> list:
+    def read_leads(self, list_name: str, with_facts: bool = False) -> list:
         """Every lead on the list, as dicts carrying "id" plus at least: Property Street Address,
         Property ZIP Code, Foreclosure Date, Auction Date, Contract Deadline, Foreclosure Status,
-        Starting Bid, Tags. Read-only."""
+        Starting Bid, Tags, Deal Grade, Deal Notes, ZIP Investor Activity. with_facts adds what the
+        Deal Grade needs: Equity Percent, Estimated Value, Structure Type, Living SqFt, Bedrooms,
+        Bathrooms, Year Built, Original Loan Amount, Loan Date. Read-only."""
         raise NotImplementedError
 
     def update_lead(self, lead_id: str, values: dict, add_tags: list) -> list:
-        """Write DAILY_FIELDS values (an empty value clears the field) and add tags. Returns problems."""
+        """Write the given lead columns (an empty value clears the field) and add tags. Returns problems."""
         raise NotImplementedError
