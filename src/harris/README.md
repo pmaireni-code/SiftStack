@@ -105,3 +105,24 @@ DataSift specifics learned live (`crm/datasift.py`): a record short of data (com
 mailing line) is filed as `incomplete`, not `clean`, so reading a list must query both types (27 of
 335 Harris leads were `incomplete`); clearing a custom field takes `""`, while `null` is rejected and
 the whole update is dropped with it.
+
+## Deal Grade (harris_grade.py + market_datasift.py)
+
+Run daily inside `run_daily.sh`, after the status refresh. Every run first re-reads DataSift's Market
+Finder for Harris (`/market-finder/buy-box/recommendations/` = the app's "Recommended Filters", and
+`/market-finder/paginated/?geoGroup=zip` = investor activity per ZIP), then re-grades every open lead
+(all but Auction Passed) and writes only the leads whose grade changed.
+
+| Deal Grade | Rule |
+|---|---|
+| Not Viable | equity under 25% |
+| Needs Data | no equity estimate |
+| Hot | equity 40%+, single family, inside the buy box, ZIP not in the bottom third for investor buys, no Verify Equity |
+| Warm | the rest at 25%+; Deal Notes says what kept it from Hot |
+
+Buy box = DataSift's recommendation with two operator-approved changes: no year-built cap (post-2010
+is 21% of Harris single-family stock and 35% of these leads) and baths up to 4. Verify Equity: a loan
+taken in the last 5 years for 85%+ of the value. Flood: FEMA NFHL zone at the record's coordinates in
+Deal Notes, plus the `Flood Zone` tag in the 100-year floodplain; never a grade change. FEMA's point
+query must send the geometry as JSON (`{"x":..,"y":..,"spatialReference":{"wkid":4326}}`); the
+`x,y` shorthand times out with a 500. Network: `hazards.fema.gov`.

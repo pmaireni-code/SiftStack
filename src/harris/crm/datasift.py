@@ -211,6 +211,8 @@ class DataSiftCRM(CRM):
                         "Equity Percent": num(d.get("equity_percent")), "Estimated Value": num(d.get("estimate_value")),
                         "Structure Type": d.get("structure_type") or "", "Living SqFt": num(d.get("sqft")),
                         "Bedrooms": num(d.get("bedrooms")), "Bathrooms": num(d.get("bathrooms")), "Year Built": num(d.get("year")),
+                        "Latitude": num((d.get("address") or {}).get("latitude")),
+                        "Longitude": num((d.get("address") or {}).get("longitude")),
                         "Original Loan Amount": num(vals.get("Original Loan Amount")),
                         "Loan Date": _iso_to_us(vals.get("Loan Date"))})
             offset += len(page)

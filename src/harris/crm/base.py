@@ -41,7 +41,7 @@ class CRM:
         Property ZIP Code, Foreclosure Date, Auction Date, Contract Deadline, Foreclosure Status,
         Starting Bid, Tags, Deal Grade, Deal Notes, ZIP Investor Activity. with_facts adds what the
         Deal Grade needs: Equity Percent, Estimated Value, Structure Type, Living SqFt, Bedrooms,
-        Bathrooms, Year Built, Original Loan Amount, Loan Date. Read-only."""
+        Bathrooms, Year Built, Latitude, Longitude, Original Loan Amount, Loan Date. Read-only."""
         raise NotImplementedError
 
     def update_lead(self, lead_id: str, values: dict, add_tags: list) -> list:
