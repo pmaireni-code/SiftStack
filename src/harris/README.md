@@ -1,0 +1,148 @@
+# Harris County, TX foreclosure pipeline
+
+Buy-before-auction leads from Harris County trustee sale notices, delivered to DataSift with the
+dates that decide whether the deal is still workable. Everything here runs in the cloud with no
+paid service: the County Clerk posts the notices free and without a CAPTCHA, HCAD publishes the
+whole property roll, and Auction.com / Xome publish the opening bids.
+
+```
+notices (County Clerk)  ->  OCR  ->  match to HCAD  ->  DataSift CSV  ->  daily refresh
+harris_notices.js          harris_ocr.py  harris_match.py  harris_to_datasift.py  bid_sources.js + harris_bid_updater.py
+```
+
+## Run
+
+```bash
+# 1. Notices for a sale month (first Tuesday). Re-runs only fetch new ones.
+node src/harris/harris_notices.js 2026 12 work/notices
+
+# 2. OCR the scanned PDFs (Tesseract, 4 workers, ~2 s a notice)
+python3 src/harris/harris_ocr.py work/notices work/notices/ocr
+
+# 3. HCAD index (download ~210 MB once a week, build ~20 s)
+python3 src/harris/hcad_index.py work/hcad --download
+
+# 4. Match notices to properties, then the DataSift upload CSV
+python3 src/harris/harris_match.py work/notices/ocr work/hcad/idx.tsv work/match.csv
+python3 src/harris/harris_to_datasift.py work/match.csv work/notices/meta.json work/leads.csv
+
+# 5. Into DataSift: one record first, read back, then the rest (re-runs attach, never duplicate notes)
+python3 src/harris/harris_upload.py work/leads.csv --limit 1 --commit
+python3 src/harris/harris_upload.py work/leads.csv --commit
+
+# 6. Every day until the sale: opening bids, postponements, status
+node src/harris/bid_sources.js work/bids.json
+python3 src/harris/harris_bid_updater.py work/leads.csv work/bids.json work/leads.csv --datasift          # dry run
+python3 src/harris/harris_bid_updater.py work/leads.csv work/bids.json work/leads.csv --datasift --commit
+```
+
+Needs: Node + Playwright (Chromium), Python 3.9+, `tesseract`, `pdftoppm` (poppler).
+DataSift calls read `DATASIFT_EMAIL` / `DATASIFT_PASSWORD` from the environment and never print them.
+Network: `www.cclerk.hctx.net`, `download.hcad.org`, `www.auction.com`, `graph.auction.com`, `www.xome.com`,
+`apiv2.reisift.io`.
+
+**Never commit `work/`.** Notices, HCAD rows and lead CSVs carry owners' names and addresses, and this repo is public.
+
+## What each lead carries
+
+| Field | Source |
+|---|---|
+| Property / owner / mailing address, value, sq ft, year built, Parcel ID | HCAD roll |
+| Original Loan Amount, Loan Date, Lender, Trustee Firm, Auction Platform | the notice (OCR) |
+| Auction Date | notice grid sale date; moves forward on a postponement |
+| Contract Deadline | Auction Date minus `DEADLINE_DAYS` (7), back to a weekday |
+| Foreclosure Status | Active / Urgent / Deadline Passed / Postponed / Auction Passed, recomputed daily |
+| Starting Bid | Auction.com Opening Bid, else Xome Est. Opening Bid, for the same sale date |
+
+Tags: `Harris`, `Foreclosure`, `Auction MM/DD/YYYY`, plus `Verify Owner` (HCAD owner not named in the
+notice), `Estate` (HCAD owner is "ESTATE OF"), `Bid Posted`.
+
+## Matching (harris_match.py)
+
+Order: HCAD account number printed in the notice, then the street address when the notice gives one,
+then lot / block / subdivision against HCAD's legal description, then the borrower's name (condos).
+Measured on 20 December 2026 notices: 17 matched, 15 with the HCAD owner's surname found in the notice.
+Rules each learned from a wrong match:
+
+- HCAD writes owners LAST FIRST. Only the owner's **surname** agreeing with the borrower counts, and only
+  as a tie-break: a shared first name put Balmoral Sec 8's borrower on a Balmoral Sec 6 house.
+- A different **section number** is a different subdivision and is penalized, however similar the text.
+- HCAD keeps partial lots as `LT 2 LESS N 1 FT BLK 7`, so legal descriptions are keyed on the lot and
+  block numbers, not the string.
+- OCR truncates subdivisions (`FAIRGR`); a 6-character prefix hit counts.
+
+## Opening bids (bid_sources.js)
+
+Texas notices never state the opening bid; the lender sets its credit bid a few days before the sale.
+Measured 2026-10-31 on the 11/03 sale: Auction.com listed 145 Harris trustee sales, 85 with an opening
+bid; Xome listed the 12/01 sale already, with the bid still TBD. Both are read through the same requests
+their public search pages make; neither site's robots.txt disallows the listing pages used.
+A listing for a LATER sale date is a postponement and never back-fills this month's bid.
+
+## Contract Deadline
+
+`DEADLINE_DAYS = 7` (set by the operator). Servicers have up to 7 business days to send a payoff
+statement, so a contract signed near the deadline should already have the payoff requested.
+
+## DataSift contract (verified live 2026-10-31)
+
+- Custom field values read back from `GET /api/internal/property/{uuid}/custom-field/`, keyed by
+  `custom_field.uuid`; dates are written as `YYYY-MM-DD`, selects as the option uuid.
+- Native fields `estimate_value`, `year`, `sqft`, `apn` and `auction_date` take a `PATCH` on the record.
+- `add-notes` APPENDS and the record's `notes` cannot be edited over the API, so the uploader skips a
+  note whose notice doc id is already on the record.
+
+## Switching CRM (src/harris/crm/)
+
+Everything that talks to a CRM lives in `crm/`. The rest of the pipeline only calls three methods
+(`crm/base.py`): `upsert_lead(row, commit)`, `read_leads(list_name)`, `update_lead(id, values, add_tags)`.
+`HARRIS_CRM` picks the connector (default `datasift`). To move to another CRM (Odoo, a white label):
+copy `crm/TEMPLATE.py`, implement the three methods, register it in `crm/__init__.py`, set
+`HARRIS_CRM=<name>`, then dry-run `harris_upload.py` and `run_daily.sh --dry-run`. Notices, OCR,
+HCAD matching, dates, status and bids do not change. The lead columns are documented in `crm/base.py`.
+
+DataSift specifics learned live (`crm/datasift.py`): a record short of data (company owner, missing
+mailing line) is filed as `incomplete`, not `clean`, so reading a list must query both types (27 of
+335 Harris leads were `incomplete`); clearing a custom field takes `""`, while `null` is rejected and
+the whole update is dropped with it.
+
+## Deal Grade (harris_grade.py + market_datasift.py)
+
+Run daily inside `run_daily.sh`, after the status refresh. Every run first re-reads DataSift's Market
+Finder for Harris (`/market-finder/buy-box/recommendations/` = the app's "Recommended Filters", and
+`/market-finder/paginated/?geoGroup=zip` = investor activity per ZIP), then re-grades every open lead
+(all but Auction Passed) and writes only the leads whose grade changed.
+
+| Deal Grade | Rule |
+|---|---|
+| Not Viable | equity under 25% |
+| Needs Data | no equity estimate |
+| Hot | equity 40%+, single family, inside the buy box, ZIP not in the bottom third for investor buys, no Verify Equity |
+| Warm | the rest at 25%+; Deal Notes says what kept it from Hot |
+
+Buy box = DataSift's recommendation with two operator-approved changes: no year-built cap (post-2010
+is 21% of Harris single-family stock and 35% of these leads) and baths up to 4. Verify Equity: a loan
+taken in the last 5 years for 85%+ of the value. Flood: FEMA NFHL zone at the record's coordinates in
+Deal Notes, plus the `Flood Zone` tag in the 100-year floodplain; never a grade change. FEMA's point
+query must send the geometry as JSON (`{"x":..,"y":..,"spatialReference":{"wkid":4326}}`); the
+`x,y` shorthand times out with a 500. Network: `hazards.fema.gov`.
+
+## DataSift filter preset
+
+Folder **Harris Foreclosure**, preset **Harris - Hot (Active, Urgent, Postponed)**: list Harris -
+Foreclosure, Deal Grade Hot, Foreclosure Status Active / Urgent / Postponed (95 leads on 2026-11-01).
+Custom fields filter as `"custom_fields": {"<field uuid>": ["<option uuid>", ...]}` inside `must`:
+options of one field are OR, fields are AND. Verified by count delta (308 -> 90 clean); a bare
+`"<field uuid>": [...]` key or `customFields` is silently ignored, and a list instead of a dict 400s.
+A preset carries no Clean/Incomplete split: the Records view applies that, so 5 of the 95 sit under
+Incomplete.
+
+## DataSift Property Temperature (the snowflake / flame)
+
+DataSift's own temperature marker is MANUAL by design (help article "Property Temperature
+Explained"); every record starts cold (`hotness` 0). The grader sets it ONCE, when a lead is graded
+for the first time and its temperature is still 0: Hot -> 5, Warm -> 3. Not Viable and Needs Data stay
+cold. After that it is never touched again, so the operator's own call wins (operator's choice,
+2026-11-01). Contract: `PATCH /property/{uuid}/ {"hotness": n}` is accepted and silently ignored;
+the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
+Records -> Add new filter block -> Deal Temperature.
