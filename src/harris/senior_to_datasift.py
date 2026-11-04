@@ -109,7 +109,7 @@ def main(sweep_path, idx_path, senior_path, market_path, out_path):
         debt = 0 if eq >= 100 else round(value * (1 - eq / 100))
         first, last, _ = split_owner(h["mailto"])
         out.append({
-            # SiftMap's address is DataSift's own postal form; HCAD appends building/unit codes ("10840 BRIAR
+            # SiftMap's address is DataSift's own postal form; HCAD appends building/unit codes ("100 MAIN
             # FOREST DR 10/45") that are no part of the street address
             "Property Street Address": x["address"].split(",")[0].strip(),
             "Property City": (x["address"].split(",")[1].strip() if x["address"].count(",") >= 2 else tc(h["site_addr_2"])),

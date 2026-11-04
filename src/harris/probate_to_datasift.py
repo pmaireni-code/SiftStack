@@ -43,7 +43,7 @@ TEMPERATURE_CRM = {"Hot": 5, "Warm": 3}
 
 
 def split_person(full):
-    """Clerk party names read FIRST [MIDDLE] LAST [, SUFFIX]: 'Richard Allen Jue, Sr.' -> (Richard, Jue)."""
+    """Clerk party names read FIRST [MIDDLE] LAST [, SUFFIX]: 'John Allen Doe, Sr.' -> (John, Doe)."""
     t = [w for w in re.sub(r"[.,]", " ", full or "").split() if w.upper() not in SUFFIX]
     if len(t) < 2:
         return "", " ".join(t)
@@ -60,11 +60,16 @@ def spouse_home(r, decedents_in_batch):
     owner = tokens(r["hcad_owner"])
     if "&" not in owner:
         return False
-    surname = owner[0]
-    co = " ".join(owner[owner.index("&") + 1:])  # "MARY B" or "JONES MARY" (another surname)
-    co_first = (co.split() or [""])[0]
-    alive = not any(co_first in d and (surname in d or co.split()[0] in d) for d in decedents_in_batch)
-    if not alive:
+    surname, co = owner[0], owner[owner.index("&") + 1:]
+    if not co:
+        return False
+    # The co-owner as (first name, surname): "SMITH JOHN & MARY" -> MARY SMITH; "SMITH JOHN & JONES MARY" may
+    # also be MARY JONES. The co-owner died too only when a decedent in the batch carries BOTH names, as
+    # whole words: matching the first name alone let three unrelated decedents who shared the co-owner's
+    # first name count her as deceased, and her home was uploaded (2026-11-03)
+    names = {(co[0], surname)} | ({(co[1], co[0])} if len(co) > 1 else set())
+    dead = any(len(t) >= 2 and (t[0], t[-1]) in names for t in (d.split() for d in decedents_in_batch))
+    if dead:
         return False  # both owners died (two cases in the batch): the house is free of a spouse
     # Only the home the spouse lives in (operator, 2026-11-01): a jointly owned rental mails its tax bill
     # elsewhere and stays a lead

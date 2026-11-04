@@ -2,7 +2,7 @@
 
     python3 probate_match.py <cases.json> <hcad_idx.tsv> <out.csv>
 
-HCAD writes owners LAST FIRST MIDDLE ("JUE SOON NAN", "SMITH JOHN & MARY"), only in the mail-to
+HCAD writes owners LAST FIRST MIDDLE ("DOE JANE ANN", "SMITH JOHN & MARY"), only in the mail-to
 line, and keeps an owner on the roll for years after death. Three ways in, strongest first:
 
   address   the clerk lists the Deceased party WITH an address on many cases: the HCAD site address
@@ -29,7 +29,7 @@ RESIDENTIAL = re.compile(r"^(A|B|E1|E2|C1)")
 STREET_SUFFIX = {"LANE": "LN", "DRIVE": "DR", "STREET": "ST", "ROAD": "RD", "COURT": "CT", "CIRCLE": "CIR",
                  "AVENUE": "AVE", "BOULEVARD": "BLVD", "TRAIL": "TRL", "PLACE": "PL", "PARKWAY": "PKWY"}
 # A middle initial breaks a tie between namesakes only on a name this rare: measured on one week (128 cases),
-# CHARLES M JOHNSON had 21 namesakes on the roll and the one "M" with a house need not be the decedent
+# a common first + last name had 21 namesakes on the roll, and the one "M" with a house need not be the decedent
 MAX_NAMESAKES = 5
 IDX = ["acct", "mailto", "mail_addr_1", "mail_city", "mail_state", "mail_zip", "site_addr_1", "site_addr_2",
        "site_addr_3", "state_class", "tot_mkt_val", "bld_ar", "yr_impr", "lgl_1", "lgl_2", "lgl_3", "lgl_4"]
@@ -42,7 +42,7 @@ def tokens(name):
 
 
 def split_name(full):
-    """'Soon Nan Jue' -> ('SOON', ['NAN'], 'JUE'). Clerk party names are FIRST [MIDDLE] LAST."""
+    """'Jane Ann Doe' -> ('JANE', ['ANN'], 'DOE'). Clerk party names are FIRST [MIDDLE] LAST."""
     t = tokens(full)
     if len(t) < 2:
         return None
@@ -51,7 +51,7 @@ def split_name(full):
 
 def addr_key(street_line, zip_code=""):
     """('4234 Tasselwood Lane', '77014') -> ('4234', 'TASSELWOOD', '77014'). Number + first street word +
-    ZIP: without the ZIP, 2806 KINGS FOREST DR and 2806 KINGS RETREAT CIR are one key."""
+    ZIP: without the ZIP, 100 OAK HILL DR and 100 OAK RIDGE CIR are one key."""
     t = re.sub(r"[^A-Z0-9 ]", " ", (street_line or "").upper()).split()
     if len(t) < 2 or not t[0].isdigit():
         return None
@@ -105,7 +105,7 @@ def load_hcad(path):
             owner = tokens(r["mailto"])
             if owner:
                 by_surname[owner[0]].append(r)
-            if "TRUST" in owner:  # "VITO J GAUDIANO JR TRUST": FIRST ... LAST order, index every word
+            if "TRUST" in owner:  # "JOHN A SMITH JR TRUST": FIRST ... LAST order, index every word
                 for w in set(owner) - {"TRUST", "REVOCABLE", "LIVING", "FAMILY", "&"}:
                     by_trust[w].append(r)
             k = addr_key(r["site_addr_1"], r["site_addr_3"])

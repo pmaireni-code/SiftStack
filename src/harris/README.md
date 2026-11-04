@@ -177,13 +177,13 @@ name plus a mailing address, so name hits are grouped by mailing address and a g
 an anchor (the decedent's or applicant's address) or by being the only one. Rules each learned
 from a wrong match:
 - An address match needs the decedent's FIRST name too: a decedent's address was her son's house.
-- A middle initial breaks a tie only on a rare name (`MAX_NAMESAKES = 5`): CHARLES M JOHNSON had
-  21 namesakes and the one "M" with a house need not be him.
-- Address keys carry the ZIP and a second street word: `2806 KINGS FOREST` vs `2806 KINGS RETREAT`.
-- Keep `&` in owner names: `SCHROEDER ALBERT & MARYANN` read MARYANN as Albert's middle name.
+- A middle initial breaks a tie only on a rare name (`MAX_NAMESAKES = 5`): a common first + last name
+  had 21 namesakes and the one "M" with a house need not be him.
+- Address keys carry the ZIP and a second street word: `100 OAK HILL` vs `100 OAK RIDGE`.
+- Keep `&` in owner names: `SMITH JOHN & MARY` read MARY as John's middle name.
 - HCAD hides the owner on ~37,600 protected accounts (`CURRENT OWNER`); a decedent's home can be
   one, found through the rentals that mail their tax bills to it.
-- Trusts are written FIRST LAST (`VITO J GAUDIANO JR TRUST`) and indexed separately.
+- Trusts are written FIRST LAST (`JOHN A SMITH JR TRUST`) and indexed separately.
 
 **Left out:** low / no-confidence matches, and surviving-spouse homes (operator, 2026-11-01): the
 HCAD owner line names a co-owner who is not a decedent in the batch and the home is owner-occupied.
@@ -256,6 +256,6 @@ CRM. Keys verified by count delta: `extra_equity_percent_min`, `extra_owner_age_
 First build (2026-11-01): 23,575 SiftMap homes -> 2,918 leads in 17 ZIPs (693 Priority, 2,225 Standard;
 Hot 258, Warm 1,833, Cold 827). Left out: market check 15,487, no HCAD over-65 homestead 4,735, not on
 the HCAD roll 384, sq ft outside the buy box 51. Property address and Estimated Value are SiftMap's
-(HCAD appends townhome building/unit codes like `10840 BRIAR FOREST DR 10/45`; DataSift stores it as
+(HCAD appends townhome building/unit codes like `100 MAIN ST 10/45`; DataSift stores it as
 `# 10`). Temperature: +2 vacant, +1 each for 80+, single owner, built 1975 or earlier, HCAD
 "Over-65" (not "or Disabled"), ZIP selling 20%+ faster than the county.
