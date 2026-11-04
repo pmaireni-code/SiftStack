@@ -7,6 +7,8 @@ Reads two Market Finder routes the app itself calls (internal, undocumented, ver
   profile that covers most past investor deals (sqft, year built, beds, baths, value ranges)
 - /market-finder/paginated/?fips[]=&geoGroup=zip   ~35 metrics per ZIP; investor transactions over
   6 months is the one the grade uses
+- the same route with geoGroup=county                the county's own metrics, the reference a ZIP is
+  compared with in the senior list's Market Check (median days on market, value, sale price)
 This is a data source, not the CRM: it stays DataSift even if the leads move to another CRM.
 """
 import json, os, sys
@@ -36,7 +38,16 @@ def fetch(fips=HARRIS_FIPS, api=None):
             break
     if not zips:
         raise SystemExit(f"Market Finder returned no ZIP metrics for FIPS {fips}")
-    return {"fetched_at": datetime.now().isoformat(timespec="seconds"), "fips": fips, "buy_box": box, "zips": zips}
+    # The county as a whole: the reference a ZIP is compared with (days on market, median value / sale price)
+    # Optional: the daily foreclosure grade never reads it, so a failure here must not stop that run
+    try:
+        cty = api.call(f"/api/internal/market-finder/paginated/?fips[]={fips}&offset=0&limit=1&geoGroup=county")
+        county = ((cty.get("data") or [{}])[0]).get("metrics") or {}
+    except Exception as e:
+        print(f"Market Finder county metrics unavailable: {str(e)[:120]}")
+        county = {}
+    return {"fetched_at": datetime.now().isoformat(timespec="seconds"), "fips": fips, "buy_box": box, "zips": zips,
+            "county": county}
 
 
 if __name__ == "__main__":
