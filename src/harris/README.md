@@ -146,3 +146,116 @@ cold. After that it is never touched again, so the operator's own call wins (ope
 2026-11-01). Contract: `PATCH /property/{uuid}/ {"hotness": n}` is accepted and silently ignored;
 the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
 Records -> Add new filter block -> Deal Temperature.
+
+## Probate (stage 2, live 2026-11-01: 53 leads uploaded and read back)
+
+New probate cases -> the decedent's Harris property -> DataSift list **Harris - Probate**, with the
+APPLICANT (would-be executor / administrator) as the contact. All free sources.
+
+```bash
+node src/harris/probate_cases.js 10/26/2026 10/30/2026 work/probate/cases.json       # clerk, by file date
+python3 src/harris/probate_match.py work/probate/cases.json work/hcad/idx.tsv work/probate/match.csv
+python3 src/harris/market_datasift.py work/probate/market.json                        # buy box (read-only)
+(cd src/harris && python3 probate_to_datasift.py ../../work/probate/match.csv ../../work/probate/leads.csv \
+    --market ../../work/probate/market.json --excluded ../../work/probate/excluded.csv)
+(cd src/harris && python3 probate_upload.py ../../work/probate/leads.csv)             # dry run: schema plan + every lead
+(cd src/harris && python3 probate_upload.py ../../work/probate/leads.csv --limit 1 --commit)   # one first, read it back
+
+# Every Monday, all of the above for cases filed in the last 9 days (scheduled task):
+bash src/harris/run_weekly_probate.sh [--dry-run]
+```
+
+**The clerk** (`CourtSearch.aspx?CaseType=Probate`, no login, no CAPTCHA) lists 200 cases a page.
+Each row lazy-loads two panels with `GET CourtCaseDetail.aspx?ID=<token>`: events (the "Case
+Initiated" comment carries `DOD: MM/DD/YYYY`) and parties (Applicant with mailing address and
+attorney + phone; Deceased, with an address on ~10% of cases). About 147 cases a week, 128 of them
+decedent estates once guardianships, wills for safekeeping, trusts and the like are dropped.
+
+**Matching** (measured on 128 cases filed 10/26-10/30/2026): 59 cases give a property (high or
+medium), 17 are ambiguous, 52 have no Harris home in the decedent's name. A PERSON on the roll is a
+name plus a mailing address, so name hits are grouped by mailing address and a group is chosen by
+an anchor (the decedent's or applicant's address) or by being the only one. Rules each learned
+from a wrong match:
+- An address match needs the decedent's FIRST name too: a decedent's address was her son's house.
+- A middle initial breaks a tie only on a rare name (`MAX_NAMESAKES = 5`): a common first + last name
+  had 21 namesakes and the one "M" with a house need not be him.
+- Address keys carry the ZIP and a second street word: `100 OAK HILL` vs `100 OAK RIDGE`.
+- Keep `&` in owner names: `SMITH JOHN & MARY` read MARY as John's middle name.
+- HCAD hides the owner on ~37,600 protected accounts (`CURRENT OWNER`); a decedent's home can be
+  one, found through the rentals that mail their tax bills to it.
+- Trusts are written FIRST LAST (`JOHN A SMITH JR TRUST`) and indexed separately.
+
+**Left out:** low / no-confidence matches, and surviving-spouse homes (operator, 2026-11-01): the
+HCAD owner line names a co-owner who is not a decedent in the batch and the home is owner-occupied.
+A rental the couple owned stays a lead. 12 homes a week.
+
+**Lead Temperature** (Hot / Warm / Cold, reasons in Temperature Notes): points for an out-of-state
+heir (+2) or one outside the Houston area (+1); nobody the estate relies on living there (rental,
+decedent living elsewhere, or sole owner gone and the heir elsewhere) (+1); 2+ Harris properties
+(+1); no will (+1); death 12+ months before the filing (+1); built before 1980 (+1). Hot = 4+ and
+inside the Market Finder buy box (value, sq ft); Warm = 2-3 or 4+ outside it; Cold = 0-1. Sets
+DataSift's own temperature on first upload (Hot 5, Warm 3) only while the record is still cold.
+First week: Hot 5, Warm 29, Cold 19.
+
+**CRM:** probate columns map to custom fields Decedent Name, Executor, Executor Attorney, Probate
+Open Date, Date of Death, Probate Case Number, Probate Type, Lead Temperature (select) and
+Temperature Notes, in a "Probate" group that `probate_upload.py --schema --commit` creates. A house
+already in DataSift keeps its owner (`Keep Owner On Existing`): only list, tags, fields and the
+note are added, since `create_property` would otherwise PATCH the owner. The note is skipped when
+its `Note Key` (`probate case <n>`) is already on the record. `find_lead` searches clean AND
+incomplete records.
+
+First live upload (2026-11-01, cases filed 10/26-10/30): schema created and read back, 1 lead read back
+field by field, then the other 52. Verified by reading the whole list back: 53 records (52 clean, 1
+incomplete), every probate field filled, Lead Temperature equal to the CSV, DataSift temperature Hot 5 /
+Warm 3 / Cold 0, no duplicated note. The list search lags the writes by up to a minute: 48 of 53 showed
+right after the upload, 53 a minute later. `POST /custom-fields/group/` takes `{"label", "entity_type"}`;
+`{"title"}` 400s.
+
+**Filter presets** (folder **Harris Probate**, 2026-11-01): **Harris - Probate Hot** and **Harris - Probate
+Warm** = list Harris - Probate AND Lead Temperature Hot / Warm, in the same `custom_fields` grammar as the
+foreclosure preset. Verified by count: 5 Hot, 29 Warm (19 Cold) of the 53 leads, equal to the CSV. A count
+taken right after an upload can read low (the earlier 26 Warm was 6 records not yet indexed).
+
+## Senior equity (stage 3): owner 75+, free and clear, Market Check
+
+Leads to wholesale to investors: an older owner of a paid-off house the local investors buy. List
+**Harris - Senior Equity**, folder **Harris Senior Equity** with two presets: the whole list ("4 criterios")
+and **Priority** (vacant, or built 1975 or earlier with one owner on the deed).
+
+```bash
+python3 src/harris/hcad_senior.py work/hcad --download              # over-65 homesteads from HCAD's exemption amounts
+python3 src/harris/senior_sweep.py work/hcad/idx.tsv work/senior/sweep.json   # SiftMap search, read-only
+python3 src/harris/market_datasift.py work/senior/market.json        # ZIP + county Market Finder metrics
+(cd src/harris && python3 senior_to_datasift.py ../../work/senior/sweep.json ../../work/hcad/idx.tsv \
+    ../../work/hcad/senior_accts.json ../../work/senior/market.json ../../work/senior/leads.csv)
+(cd src/harris && python3 senior_upload.py ../../work/senior/leads.csv)            # dry run
+(cd src/harris && python3 senior_upload.py ../../work/senior/leads.csv --presets --commit)
+```
+
+**Senior** = HCAD over-65 homestead AND SiftMap owner age 75+. HCAD blanks the age and disability codes
+(OVR / DIS are on zero accounts) but not the amounts: an over-65 homestead carries the district's OVR
+amount on top of the residence homestead, folded into the RES row (`hcad_senior.py`). Most districts
+give over-65 and disability the same amount ("Over-65 or Disabled"); 42 do not, and there 95% are
+over-65. 28 of 40 probate decedents' homes carry the flag.
+
+**SiftMap search** (`map.reisift.io/properties/search/`, the user JWT) is free and adds nothing to the
+CRM. Keys verified by count delta: `extra_equity_percent_min`, `extra_owner_age_min`,
+`extra_year_built_max`, `beds_min/max`, `preset_owner_occupied`, `preset_vacant`. Ignored silently:
+`equity_percent_min`, `year_built_max`, `sqft_*`, `baths_*`, `owner_age_min`, `preset_senior`.
+`result_index` is the ROW OFFSET: paging it by 1 walked one row at a time (516 calls, 765 rows).
+
+**Market Check** (the operator's four ZIP criteria, every reference stored on the lead):
+1. ZIP median sale price below the ZIP median home value, and inside the middle 60%
+2. ZIP days on market at or under the county's (Market Finder county metrics, 58 days)
+3. lead value inside the middle 60% = Harris single-family values without the cheapest and dearest 20%
+   ($201,883 - $432,887 on the 2026 roll); free-and-clear leads also capped at $300,000
+4. ZIP investor purchases between the median ZIP (53) and the 90th percentile (162): solid, not the
+   most contested
+
+First build (2026-11-01): 23,575 SiftMap homes -> 2,918 leads in 17 ZIPs (693 Priority, 2,225 Standard;
+Hot 258, Warm 1,833, Cold 827). Left out: market check 15,487, no HCAD over-65 homestead 4,735, not on
+the HCAD roll 384, sq ft outside the buy box 51. Property address and Estimated Value are SiftMap's
+(HCAD appends townhome building/unit codes like `100 MAIN ST 10/45`; DataSift stores it as
+`# 10`). Temperature: +2 vacant, +1 each for 80+, single owner, built 1975 or earlier, HCAD
+"Over-65" (not "or Disabled"), ZIP selling 20%+ faster than the county.
