@@ -5,8 +5,9 @@
 
 Reads every lead on "Harris - Probate" through the CRM connector. A lead is assigned when it has a Date
 of Death, at least DAYS days have passed since it, and nobody is assigned yet: an existing assignment
-(to anyone) is never changed, so a lead the operator reassigned stays where it is. Leads without a Date
-of Death are only counted (the clerk's case did not carry one). Each assignment is read back.
+(to anyone) is never changed, so a lead the operator reassigned stays where it is. When the clerk's case
+carries no Date of Death, the count starts at the Probate Open Date instead (operator, 2026-11-09: there
+is no case without a decedent, so the filing date stands in). Each assignment is read back.
 Operator's rule, 2026-11-09: 14 days after the death, to Maireni Peguero.
 
 Every lead past that mark also gets the tag "Probate 2 Weeks", assigned or not, and the filter preset
@@ -62,22 +63,25 @@ def main(*flags):
     days = int(flags[flags.index("--days") + 1]) if "--days" in flags else 14
     user = flags[flags.index("--user") + 1] if "--user" in flags else "Maireni Peguero"
     crm = get_crm()
-    leads = crm.list_assignments(LIST, ("Date of Death",))
+    leads = crm.list_assignments(LIST, ("Date of Death", "Probate Open Date"))
+    # The day the 14-day count starts: the death, or the case's opening when the clerk gave no death date
+    start = lambda l: parse_date(l["Date of Death"]) or parse_date(l["Probate Open Date"])
     today = date.today()
-    due, waiting, no_dod, taken = [], [], 0, 0
+    due, waiting, no_dod, no_date, taken = [], [], 0, 0, 0
     for l in leads:
         if l["Assigned To"]:
             taken += 1
             continue
-        dod = parse_date(l["Date of Death"])
+        dod = start(l)
+        no_dod += not parse_date(l["Date of Death"])
         if not dod:
-            no_dod += 1
+            no_date += 1
         elif (today - dod).days >= days:
             due.append(l)
         else:
             waiting.append((l, days - (today - dod).days))
     # The tag marks every lead past the mark, whoever it is assigned to
-    past = [l for l in leads if parse_date(l["Date of Death"]) and (today - parse_date(l["Date of Death"])).days >= days]
+    past = [l for l in leads if start(l) and (today - start(l)).days >= days]
     to_tag = [l for l in past if TAG not in [t.strip() for t in (l.get("Tags") or "").split(",")]]
     tagged = 0
     for l in to_tag:
@@ -105,7 +109,8 @@ def main(*flags):
             print(f"  FAIL {l['Property Street Address']}: {str(e)[:160]}")
     verb = "assigned" if commit else "would assign"
     print(f"PROBATE ASSIGN: {len(leads)} leads | {verb} {ok if commit else len(due)} to {user} ({days}+ days since death)"
-          f" | {len(waiting)} not yet due | {taken} already assigned | {no_dod} without a date of death"
+          f" | {len(waiting)} not yet due | {taken} already assigned | {no_dod} counted from the case opening (no death date)"
+          + (f" | {no_date} with no date at all" if no_date else "")
           + (f" | {failed} failed" if failed else "")
           + f" | tag {TAG!r}: {'added to ' + str(tagged) if commit else 'would add to ' + str(len(to_tag))} of {len(past)}")
     for l, left in sorted(waiting, key=lambda x: x[1]):
