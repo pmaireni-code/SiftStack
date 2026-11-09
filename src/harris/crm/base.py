@@ -50,6 +50,16 @@ class CRM:
         (the CRM's own hot/warm/cold marker, 0-5). Read-only."""
         raise NotImplementedError
 
+    def list_assignments(self, list_name: str, fields: tuple = ()) -> list:
+        """Every lead on the list as {"id", "Property Street Address", "Assigned To" (user's full name or ""),
+        <each custom field in fields>}. Read-only. Optional: used by probate_assign.py."""
+        raise NotImplementedError
+
+    def assign_lead(self, lead_id: str, user_name: str) -> bool:
+        """Assign the lead to the CRM user with this full name and read it back. Returns True when the
+        record now reads as assigned to that user. Optional: used by probate_assign.py."""
+        raise NotImplementedError
+
     def update_lead(self, lead_id: str, values: dict, add_tags: list) -> list:
         """Write the given lead columns (an empty value clears the field) and add tags. A
         "Property Temperature" value sets the CRM's own hot/warm/cold marker. Returns problems."""

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Daily Harris run: Starting Bid, postponements, Foreclosure Status and Deal Grade for every lead.
+# Daily Harris run: Starting Bid, postponements, Foreclosure Status and Deal Grade for every lead,
+# then probate leads assigned to their user 14 days after the death (probate_assign.py).
 #
 #   bash src/harris/run_daily.sh [--dry-run]
 #
@@ -20,6 +21,10 @@ python3 harris_bid_updater.py "../../$W/leads.csv" "../../$W/bids.json" "../../$
 echo "== Market Finder refresh + Deal Grade"
 python3 market_datasift.py "../../$W/market.json"
 python3 harris_grade.py "../../$W/market.json" "../../$W/graded.csv" --crm $COMMIT | tee "../../$W/grade.log" | grep -vE "^  (OK|DRY)" || true
+
+echo "== Probate: assign to Maireni Peguero 14 days after the death"
+# Independent of the foreclosure steps above: a failure here is reported, never fatal
+python3 probate_assign.py $COMMIT | tee "../../$W/probate_assign.log" || echo "WARN: probate assignment failed (see probate_assign.log)"
 
 python3 - "../../$W/graded.csv" <<'EOF'
 import csv, sys

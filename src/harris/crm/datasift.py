@@ -263,12 +263,63 @@ class DataSiftCRM(CRM):
             if len(page) < 100:
                 return out
 
+    # ---- assignment (probate_assign.py)
+    def _users(self):
+        """full name (lower case) -> user uuid. GET /account/user/ returns a FLAT array."""
+        r = self.api.call("/api/internal/account/user/")
+        r = r if isinstance(r, list) else r.get("results") or []
+        return {f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip().lower(): u["uuid"] for u in r}
+
+    def list_assignments(self, list_name, fields=()):
+        """Search rows carry no assignee, so each record's detail is read (one call a lead, ~2/s)."""
+        lists = self.api.call("/api/internal/list/?limit=999")
+        lists = lists if isinstance(lists, list) else lists.get("results") or []
+        lst = next((x for x in lists if (x.get("title") or "").strip().lower() == list_name.lower()), None)
+        if not lst:
+            raise SystemExit(f"no list named {list_name!r} in DataSift")
+        names = {v: k for k, v in self._users().items()}
+        out = []
+        for ptype in ("clean", "incomplete"):
+            offset = 0
+            while True:
+                res = self.api.call("/api/internal/property/", "POST", {"limit": 100, "offset": offset, "query": {"must": {
+                    "property_type": ptype, "any_lists": [lst["uuid"]]}}}, headers={"x-http-method-override": "GET"})
+                page = res.get("results") or res.get("data") or []
+                for rec in page:
+                    d = self.api.call(f"/api/internal/property/{rec['uuid']}/")
+                    a = d.get("assigned_to")
+                    a = a.get("uuid") if isinstance(a, dict) else a
+                    tags = [(t.get("name") or t.get("title")) if isinstance(t, dict) else t for t in d.get("tags") or []]
+                    row = {"id": rec["uuid"], "Property Street Address": (d.get("address") or {}).get("street") or "",
+                           "Assigned To": names.get(a, a or ""), "Tags": ", ".join(t for t in tags if t)}
+                    if fields:
+                        cf = self.api.call(f"/api/internal/property/{rec['uuid']}/custom-field/")
+                        vals = {(r.get("custom_field") or {}).get("label"): r.get("value") for r in (cf.get("results") or [])}
+                        for f in fields:
+                            row[f] = _iso_to_us(vals.get(f)) if f in ("Date of Death", "Probate Open Date") else (vals.get(f) or "")
+                    out.append(row)
+                offset += len(page)
+                if len(page) < 100:
+                    break
+        return out
+
+    def assign_lead(self, lead_id, user_name):
+        """PATCH /property/{uuid}/ {"assigned_to": <user uuid>} (verified live 2026-11-09: only that field
+        changes), then read it back."""
+        uid = self._users().get(user_name.strip().lower())
+        if not uid:
+            raise SystemExit(f"no DataSift user named {user_name!r}")
+        self.api.call(f"/api/internal/property/{lead_id}/", "PATCH", {"assigned_to": uid})
+        a = self.api.call(f"/api/internal/property/{lead_id}/").get("assigned_to")
+        return (a.get("uuid") if isinstance(a, dict) else a) == uid
+
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
         cvals = self._custom_values(values, problems, only=tuple(values))
-        self.api.call(f"/api/internal/property/{lead_id}/custom-field/update-values/", "PATCH",
-                      [{"field_uuid": v["field_uuid"], "value": v["value"]} for v in cvals])
+        if cvals:  # a tags-only update (probate_assign.py) sends no field values
+            self.api.call(f"/api/internal/property/{lead_id}/custom-field/update-values/", "PATCH",
+                          [{"field_uuid": v["field_uuid"], "value": v["value"]} for v in cvals])
         # Keep DataSift's own auction_date in step too, so a postponement moves native filters as well
         if parse_date(values.get("Auction Date")):
             self.api.call(f"/api/internal/property/{lead_id}/", "PATCH",
