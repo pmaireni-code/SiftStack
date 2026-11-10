@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Daily Harris run: Starting Bid, postponements, Foreclosure Status and Deal Grade for every lead,
-# then probate leads assigned to their user 14 days after the death (probate_assign.py).
+# then probate leads assigned to their user 14 days after the death (probate_assign.py), and the
+# dialing order of every phone on the call pipeline (phone_priority.py).
 #
 #   bash src/harris/run_daily.sh [--dry-run]
 #
@@ -25,6 +26,9 @@ python3 harris_grade.py "../../$W/market.json" "../../$W/graded.csv" --crm $COMM
 echo "== Probate: assign to Maireni Peguero 14 days after the death"
 # Independent of the foreclosure steps above: a failure here is reported, never fatal
 python3 probate_assign.py $COMMIT | tee "../../$W/probate_assign.log" || echo "WARN: probate assignment failed (see probate_assign.log)"
+
+echo "== Phone priority on the call pipeline (Priority 1 / Blitz Active)"
+python3 phone_priority.py $COMMIT | tee "../../$W/phone_priority.log" || echo "WARN: phone priority failed (see phone_priority.log)"
 
 python3 - "../../$W/graded.csv" <<'EOF'
 import csv, sys

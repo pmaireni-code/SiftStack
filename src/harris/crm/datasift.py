@@ -313,6 +313,29 @@ class DataSiftCRM(CRM):
         a = self.api.call(f"/api/internal/property/{lead_id}/").get("assigned_to")
         return (a.get("uuid") if isinstance(a, dict) else a) == uid
 
+    # ---- phone priority (phone_priority.py)
+    def read_phones(self, lead_id):
+        """(owner uuid, [phone dicts]) from the record detail. A phone is {number, type, status, tags,
+        is_connected}; tags may come back as names or {name}/{title} objects."""
+        o = self.api.call(f"/api/internal/property/{lead_id}/").get("owner") or {}
+        phones = []
+        for p in o.get("phones") or []:
+            p = dict(p)
+            p["tags"] = [(t.get("name") or t.get("title")) if isinstance(t, dict) else t for t in p.get("tags") or []]
+            phones.append(p)
+        return o.get("uuid"), phones
+
+    def set_phone_tags(self, lead_id, owner_uuid, phone, tags):
+        """POST /owner/{uuid}/upsert-phones/ upserts BY NUMBER and REPLACES the phone object, so its type,
+        status and connection flag are carried through unchanged; only the tags change. Read back."""
+        payload = {"number": phone["number"], "type": phone.get("type") or "UNKNOWN", "tags": list(tags),
+                   "status": (phone.get("status") or "UNKNOWN").upper(), "is_connected": phone.get("is_connected", True)}
+        self.api.call(f"/api/internal/owner/{owner_uuid}/upsert-phones/", "POST", {"phones": [payload]})
+        _, after = self.read_phones(lead_id)
+        got = next((p for p in after if p["number"] == phone["number"]), None)
+        return bool(got) and sorted(got["tags"]) == sorted(tags) and got.get("type") == payload["type"] \
+            and (got.get("status") or "").upper() == payload["status"]
+
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
