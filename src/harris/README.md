@@ -137,15 +137,25 @@ options of one field are OR, fields are AND. Verified by count delta (308 -> 90 
 A preset carries no Clean/Incomplete split: the Records view applies that, so 5 of the 95 sit under
 Incomplete.
 
-## DataSift Property Temperature (the snowflake / flame)
+## Prospect Score vs DataSift's temperature (2026-11-11)
 
-DataSift's own temperature marker is MANUAL by design (help article "Property Temperature
-Explained"); every record starts cold (`hotness` 0). The grader sets it ONCE, when a lead is graded
-for the first time and its temperature is still 0: Hot -> 5, Warm -> 3. Not Viable and Needs Data stay
-cold. After that it is never touched again, so the operator's own call wins (operator's choice,
-2026-11-01). Contract: `PATCH /property/{uuid}/ {"hotness": n}` is accepted and silently ignored;
-the app saves it with `POST /api/internal/property/{uuid}/hotness/ {"hotness": n}`. Filter in the UI:
-Records -> Add new filter block -> Deal Temperature.
+DataSift's own temperature (snowflake / flame, `hotness` 0-5) and the property status mean real seller
+interest AFTER a conversation: the caller sets them. The pipeline never writes either (operator,
+2026-11-11), and the connector's safety brakes refuse any write to them (`crm/guard.py`, code
+`native_temperature_or_status`), like skip trace. The score computed before any contact goes to two custom
+fields shared by every list (group "Prospect"):
+
+| List | Prospect Score | Prospect Reasons |
+|---|---|---|
+| Harris - Foreclosure | = Deal Grade (Hot, Warm, Not Viable, Needs Data) | = Deal Notes |
+| Harris - Probate | = Lead Temperature (Hot, Warm, Cold) | = Temperature Notes |
+| Harris - Senior Equity | = Lead Temperature (Hot, Warm, Cold) | = Temperature Notes |
+
+Deal Grade and Lead Temperature are still written as before (the probate Hot / Warm presets filter on
+Lead Temperature). Until 2026-11-11 the grader and the probate / senior uploads set DataSift's temperature
+(Hot 5, Warm 3) before any contact; `temperature_cleanup.py` puts those back to 0, only where nobody has
+talked to the owner yet (see its docstring). Contract, for the record: `PATCH /property/{uuid}/
+{"hotness": n}` is accepted and ignored; the app writes `POST /property/{uuid}/hotness/ {"hotness": n}`.
 
 ## Probate (stage 2, live 2026-11-01: 53 leads uploaded and read back)
 
@@ -193,8 +203,8 @@ A rental the couple owned stays a lead. 12 homes a week.
 heir (+2) or one outside the Houston area (+1); nobody the estate relies on living there (rental,
 decedent living elsewhere, or sole owner gone and the heir elsewhere) (+1); 2+ Harris properties
 (+1); no will (+1); death 12+ months before the filing (+1); built before 1980 (+1). Hot = 4+ and
-inside the Market Finder buy box (value, sq ft); Warm = 2-3 or 4+ outside it; Cold = 0-1. Sets
-DataSift's own temperature on first upload (Hot 5, Warm 3) only while the record is still cold.
+inside the Market Finder buy box (value, sq ft); Warm = 2-3 or 4+ outside it; Cold = 0-1. Also written
+to Prospect Score / Prospect Reasons (since 2026-11-11 DataSift's own temperature is never set).
 First week: Hot 5, Warm 29, Cold 19.
 
 **CRM:** probate columns map to custom fields Decedent Name, Executor, Executor Attorney, Probate

@@ -15,7 +15,7 @@ Destructive (both profiles): a DELETE always needs SIFT_ALLOW_DESTRUCTIVE=1 or -
 Clearing a field, removing a tag or unassigning on more than BULK_DESTRUCTIVE leads needs the same,
 except a (task, field) listed in EXCEPTIONS, which carries its own reason test and cap.
 """
-import os, re, sys, time
+import contextlib, os, re, sys, time
 from collections import Counter, OrderedDict
 from datetime import date
 
@@ -40,6 +40,24 @@ def _bid_clear_ok(values, today=None):
 # A clear that fails `ok` is blocked whatever the count and whatever the authorization.
 EXCEPTIONS = {("harris_bid_updater", "Starting Bid"): {"max": 500, "ok": _bid_clear_ok,
                                                        "why": "auction date passed, or Postponed / Auction Passed"}}
+
+
+# DataSift's own temperature (hotness) and property status mean real seller interest AFTER a conversation:
+# the caller's to set, never the pipeline's (operator, 2026-11-11). Every write to either is refused, with no
+# flag or profile that re-enables it. The single exception is putting the temperature back to 0 from
+# temperature_cleanup.py (a field clear through the brakes), to be removed once that cleanup is done.
+NATIVE_COLUMNS = ("Property Temperature", "Property Status", "Status", "Temperature")
+NATIVE_KEYS = ("hotness", "status")
+CLEANUP_TASK = "temperature_cleanup"
+
+
+def forbid_native(values):
+    """Refuse a lead update that carries the native temperature or property status (connector entry point)."""
+    bad = [k for k in (values or {}) if k in NATIVE_COLUMNS]
+    if bad:
+        current()._block(Blocked(f"writing {', '.join(bad)} is forbidden: DataSift's temperature and property "
+                                 "status are set by the caller after a conversation, never by the pipeline",
+                                 code="native_temperature_or_status"))
 
 
 class GuardStop(SystemExit):
@@ -144,11 +162,18 @@ class Run:
         try:
             if self.profile == "scheduled" and self.planned > self.ceiling:
                 raise Blocked(f"plan of {self.planned:,} leads is over the scheduled ceiling of {self.ceiling:,}", "error", "ceiling")
-            counts = Counter()
-            for c in changes:
-                self._check(c.get("id") or c.get("address"), c, counts)
             if self.profile == "manual":
                 self.mode = self.forced_mode or ("live" if self.planned <= DRY_THRESHOLD else "dry-run")
+            counts = Counter()
+            try:
+                for c in changes:
+                    self._check(c.get("id") or c.get("address"), c, counts)
+            except Blocked as b:
+                if self.mode != "dry-run":
+                    raise
+                # a simulation writes nothing: it shows the summary and says what a real run would need
+                self.would_block = b.reason
+            if self.profile == "manual":
                 if self.mode == "live" and self.planned > self.max_records:
                     raise Blocked(f"plan of {self.planned:,} leads is over the per-run cap of {self.max_records:,} "
                                   "(raise it for this task only with SIFT_MAX_RECORDS)", code="cap")
@@ -270,6 +295,8 @@ class Run:
                              + [f"+tag {t}" for t in m["add_tags"]] + [f"-tag {t}" for t in m["remove_tags"]]
                              + [f"{cat}={v}" for cat, v in m["other"]])
             lines.append(f"  {self._addr(lead)}: {what[:200]}")
+        if self.would_block:
+            lines.append(f"A real run would be BLOCKED as it stands: {self.would_block}.")
         lines.append("To write it: SIFT_MODE=live (and --commit), after reviewing this summary.")
         return "\n".join(lines)
 
@@ -278,7 +305,32 @@ class Run:
         m = method.upper()
         return m in ("PATCH", "PUT", "DELETE") or (m == "POST" and (headers or {}).get("x-http-method-override", "").upper() != "GET")
 
-    def on_call(self, method, path, headers):
+    @contextlib.contextmanager
+    def temperature_reset(self):
+        """The one allowed temperature write: back to 0, from temperature_cleanup.py only."""
+        if self.task != CLEANUP_TASK:
+            self._block(Blocked(f"{self.task} may not write DataSift's temperature (only {CLEANUP_TASK} may reset "
+                                "it to 0)", code="native_temperature_or_status"))
+        self._temp_reset = True
+        try:
+            yield
+        finally:
+            self._temp_reset = False
+
+    def _native_write(self, method, path, body):
+        """A write to the native temperature or property status -> its reason, or "" when it is not one."""
+        p = (path or "").split("?")[0]
+        if "/hotness" in p:
+            ok = (getattr(self, "_temp_reset", False) and self.task == CLEANUP_TASK and isinstance(body, dict)
+                  and set(body) == {"hotness"} and int(body["hotness"] or 0) == 0)
+            return "" if ok else f"{method} {p}: writing DataSift's temperature is forbidden"
+        if "/property" in p and re.search(r"status", p.split("/property", 1)[1]):
+            return f"{method} {p}: writing the property status is forbidden"
+        if "/property" in p and isinstance(body, dict) and set(body) & set(NATIVE_KEYS):
+            return f"{method} {p}: writing {sorted(set(body) & set(NATIVE_KEYS))} on a property is forbidden"
+        return ""
+
+    def on_call(self, method, path, headers, body=None):
         """Before a call. Returns a synthetic response to skip a write, or None to send it."""
         self.api_calls += 1
         from datasift_api_upload import is_skiptrace_run
@@ -287,6 +339,9 @@ class Run:
                                 code="skiptrace_forbidden"))
         if not self.is_write(method, headers):
             return None
+        why = self._native_write(method, path, body)
+        if why:  # forbidden outright, like skip trace
+            self._block(Blocked(why + " (the caller sets it after a conversation)", code="native_temperature_or_status"))
         if method.upper() == "DELETE" and not self.allow_destructive:
             self._block(Blocked(f"DELETE {path} needs explicit authorization (SIFT_ALLOW_DESTRUCTIVE=1 or --allow-destructive)",
                                 code="delete"))

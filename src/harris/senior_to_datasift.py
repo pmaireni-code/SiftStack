@@ -21,7 +21,8 @@ Standard = the rest. One list, two filter presets.
 Lead Temperature (how likely the owner sells, all leads already pass the market):
   +2 USPS vacant   +1 owner 80+   +1 single owner   +1 built 1975 or earlier
   +1 HCAD says Over-65 (not "or Disabled")   +1 ZIP sells 20%+ faster than the county
-Hot = 4+, Warm = 2-3, Cold = 0-1. Sets the CRM's own temperature on first upload (Hot 5, Warm 3).
+Hot = 4+, Warm = 2-3, Cold = 0-1. Also written to Prospect Score / Prospect Reasons; DataSift's own temperature
+is never set (it is the caller's, after a conversation; operator, 2026-11-11).
 """
 import collections, csv, json, re, statistics, sys
 from datetime import date
@@ -29,7 +30,6 @@ from datetime import date
 from harris_to_datasift import split_owner, street, tc
 
 LIST = "Harris - Senior Equity"
-TEMPERATURE_CRM = {"Hot": 5, "Warm": 3}
 SENIOR = ("Over-65", "Over-65 or Disabled")
 IDX = ["acct", "mailto", "mail_addr_1", "mail_city", "mail_state", "mail_zip", "site_addr_1", "site_addr_2",
        "site_addr_3", "state_class", "tot_mkt_val", "bld_ar", "yr_impr"]
@@ -132,7 +132,8 @@ def main(sweep_path, idx_path, senior_path, market_path, out_path):
             "County Median Home Value": f"{ref['value']:.0f}", "County Days on Market": f"{ref['dom']:.0f}",
             "Price Band 60": f"{money(band[0])} - {money(band[1])}", "Investor Volume Band": f"{ref['tx'][0]:.0f} - {ref['tx'][1]:.0f} (6 months)",
             "Lead Temperature": temp, "Temperature Notes": (f"{temp} ({pts} pts): " + "; ".join(notes or ["no extra signal"]))[:500],
-            "Property Temperature": TEMPERATURE_CRM.get(temp, "")})
+            # the prospect score, comparable across lists; DataSift's own temperature is the caller's (never set here)
+            "Prospect Score": temp, "Prospect Reasons": (f"{temp} ({pts} pts): " + "; ".join(notes or ["no extra signal"]))[:500]})
     cols = list(dict.fromkeys(k for o in out for k in o))
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)

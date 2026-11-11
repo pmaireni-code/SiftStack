@@ -33,10 +33,10 @@ EQUITY_MIN = 25.0
 BATHS_MAX = 4
 VERIFY_YEARS = 5
 VERIFY_LTV = 0.85
-GRADE_FIELDS = ("Deal Grade", "Deal Notes", "ZIP Investor Activity")
-# DataSift's own temperature marker, set ONCE: when a lead is graded for the first time and nobody has
-# touched its temperature yet (still 0, cold). After that it is the operator's to change (agreed 2026-11-01)
-INITIAL_TEMPERATURE = {"Hot": 5, "Warm": 3}
+# Prospect Score / Prospect Reasons: the one prospect score comparable across lists (foreclosure, probate,
+# senior). Here it mirrors Deal Grade / Deal Notes. DataSift's own temperature is never written: it is the
+# caller's, after a conversation (operator, 2026-11-11)
+GRADE_FIELDS = ("Deal Grade", "Deal Notes", "ZIP Investor Activity", "Prospect Score", "Prospect Reasons")
 FLOOD_TAG = "Flood Zone"  # in FEMA's 100-year floodplain; a note and a tag, never a grade change
 NFHL = "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query"
 
@@ -135,6 +135,8 @@ def main(market_path, out_path, *flags):
         l["Deal Grade"], l["Deal Notes"], l["ZIP Investor Activity"] = g, "; ".join(notes + [flood])[:500], tier
         l["_flood_tag"] = sfha
         counts[g] = counts.get(g, 0) + 1
+    for l in leads:  # every lead, a closed one too (it keeps its last grade)
+        l["Prospect Score"], l["Prospect Reasons"] = l.get("Deal Grade") or "", l.get("Deal Notes") or ""
     cols = list(dict.fromkeys(k for l in leads for k in l))
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
@@ -146,17 +148,11 @@ def main(market_path, out_path, *flags):
     if "--crm" not in flags:
         return
     commit = "--commit" in flags
-    for l, b in zip(leads, before):
-        first_grade = not (b.get("Deal Grade") or "") and l.get("Deal Grade")
-        untouched = num(l.get("Property Temperature")) in (None, 0.0)
-        if first_grade and untouched and l["Deal Grade"] in INITIAL_TEMPERATURE:
-            l["_temperature"] = INITIAL_TEMPERATURE[l["Deal Grade"]]
     changed = [l for l, b in zip(leads, before) if any((l.get(k) or "") != (b.get(k) or "") for k in GRADE_FIELDS)]
     print(f"CRM: {len(changed)} leads with a new grade")
     # safety brakes (crm/guard.py); without --commit a preview of what they would decide
     crm.plan([{"id": l["id"], "address": l["Property Street Address"],
-               "set": {**{k: l.get(k) or "" for k in GRADE_FIELDS},
-                       **({"Property Temperature": l["_temperature"]} if l.get("_temperature") else {})},
+               "set": {k: l.get(k) or "" for k in GRADE_FIELDS},
                "before": {k: b.get(k) or "" for k in GRADE_FIELDS},
                "add_tags": [FLOOD_TAG] if l.get("_flood_tag") and FLOOD_TAG not in (l.get("Tags") or "") else []}
               for l, b in zip(leads, before) if l in changed], commit)
@@ -168,8 +164,6 @@ def main(market_path, out_path, *flags):
         try:
             add = [FLOOD_TAG] if l.get("_flood_tag") and FLOOD_TAG not in (l.get("Tags") or "") else []
             vals = {k: l.get(k) or "" for k in GRADE_FIELDS}
-            if l.get("_temperature"):
-                vals["Property Temperature"] = l["_temperature"]
             problems = crm.update_lead(l["id"], vals, add)
             print(f"  {'OK  ' if not problems else 'WARN'} {l['Property Street Address']}: {l['Deal Grade']}")
             for p in problems:

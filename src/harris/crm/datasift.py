@@ -33,7 +33,10 @@ FIELDS = {"Starting Bid": "Starting Bid", "Original Loan Amount": "Original Loan
           **{k: k for k in ("Senior Tier", "Owner Age", "Senior Exemption", "Equity Percent", "Estimated Debt",
                             "Market Check", "ZIP Median Sale Price", "ZIP Median Home Value", "ZIP Days on Market",
                             "ZIP Investor Transactions", "County Median Home Value", "County Days on Market",
-                            "Price Band 60", "Investor Volume Band")}}
+                            "Price Band 60", "Investor Volume Band")},
+          # One prospect score comparable across every list (Hot / Warm / Cold / Not Viable / Needs Data),
+          # computed before any contact. It is NOT DataSift's own temperature, which is the caller's call
+          "Prospect Score": "Prospect Score", "Prospect Reasons": "Prospect Reasons"}
 # Lead column -> native property field (names as the record detail returns them)
 NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqFt": "sqft", "Parcel ID": "apn",
           "Auction Date": "auction_date"}  # DataSift's own auction_date, so native filters see the sale too
@@ -48,7 +51,7 @@ class PatientApi(Api):
     def call(self, path, method="GET", body=None, _retry=True, headers=None):
         run = guard.current()
         if _retry:  # Api.call re-enters with _retry=False after a 401: one logical call
-            skip = run.on_call(method, path, headers)
+            skip = run.on_call(method, path, headers, body)
             if skip is not None:
                 return skip
         res = self._send(path, method, body, _retry, headers)
@@ -228,16 +231,8 @@ class DataSiftCRM(CRM):
             have = (self.api.call(f"/api/internal/property/{uuid}/").get("notes") or "") if res.get("existing") else ""
             if not doc or doc not in have:
                 self.api.call(f"/api/internal/property/{uuid}/add-notes/", "POST", {"notes": row["Notes"][:2000]})
-        # DataSift's own temperature marker (snowflake / flame): set from the lead only while the record is
-        # still cold (0), so an operator's call on an existing record is never overwritten
-        temp = row.get("Property Temperature")
-        if temp not in (None, ""):
-            rec = self.api.call(f"/api/internal/property/{uuid}/")
-            if not rec.get("hotness"):
-                self.api.call(f"/api/internal/property/{uuid}/hotness/", "POST", {"hotness": int(float(temp))})
-                got = self.api.call(f"/api/internal/property/{uuid}/").get("hotness")
-                if int(got or 0) != int(float(temp)):
-                    problems.append(f"temperature: sent {temp}, reads {got}")
+        # DataSift's own temperature and property status are the caller's, after talking to the seller: never
+        # written here (operator, 2026-11-11). The prospect score goes to Prospect Score / Prospect Reasons.
         problems += self._read_back(uuid, values, native, row)
         if problems:
             run.reject(key)
@@ -282,7 +277,9 @@ class DataSiftCRM(CRM):
                     "Tags": ", ".join(t for t in tags if t),
                     "Deal Grade": options.get(vals.get("Deal Grade"), vals.get("Deal Grade") or ""),
                     "Deal Notes": vals.get("Deal Notes") or "",
-                    "ZIP Investor Activity": options.get(vals.get("ZIP Investor Activity"), vals.get("ZIP Investor Activity") or "")})
+                    "ZIP Investor Activity": options.get(vals.get("ZIP Investor Activity"), vals.get("ZIP Investor Activity") or ""),
+                    "Prospect Score": options.get(vals.get("Prospect Score"), vals.get("Prospect Score") or ""),
+                    "Prospect Reasons": vals.get("Prospect Reasons") or ""})
                 if with_facts:
                     # Search rows carry no property facts: the record detail does
                     d = self.api.call(f"/api/internal/property/{rec['uuid']}/")
@@ -291,7 +288,6 @@ class DataSiftCRM(CRM):
                         "Equity Percent": num(d.get("equity_percent")), "Estimated Value": num(d.get("estimate_value")),
                         "Structure Type": d.get("structure_type") or "", "Living SqFt": num(d.get("sqft")),
                         "Bedrooms": num(d.get("bedrooms")), "Bathrooms": num(d.get("bathrooms")), "Year Built": num(d.get("year")),
-                        "Property Temperature": num(d.get("hotness")),
                         "Latitude": num((d.get("address") or {}).get("latitude")),
                         "Longitude": num((d.get("address") or {}).get("longitude")),
                         "Original Loan Amount": num(vals.get("Original Loan Amount")),
@@ -408,9 +404,26 @@ class DataSiftCRM(CRM):
                 url = nxt.split("reisift.io", 1)[-1] if nxt else None
         return d, out
 
+    # ---- temperature cleanup (temperature_cleanup.py ONLY)
+    def reset_temperature(self, lead_id, current, address=""):
+        """Put DataSift's own temperature back to 0 (cold) on a lead whose temperature the pipeline set before
+        any contact. The ONLY temperature write left in the code: a field clear through the safety brakes
+        (dry run, authorization above 10 leads), allowed only to the temperature_cleanup task. Read back."""
+        run = guard.current()
+        if run.before_write(lead_id, {"set": {"Property Temperature": ""}, "before": {"Property Temperature": str(current)}},
+                            address):
+            return True
+        with run.temperature_reset():
+            self.api.call(f"/api/internal/property/{lead_id}/hotness/", "POST", {"hotness": 0})
+        ok = int(self.api.call(f"/api/internal/property/{lead_id}/").get("hotness") or 0) == 0
+        if not ok:
+            run.reject(lead_id)
+        return ok
+
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
+        guard.forbid_native(values)  # temperature / property status: refused, whatever the caller
         if guard.current().before_write(lead_id, {"set": dict(values), "add_tags": list(add_tags or [])}):
             return problems
         cvals = self._custom_values(values, problems, only=tuple(values))
@@ -421,11 +434,6 @@ class DataSiftCRM(CRM):
         if parse_date(values.get("Auction Date")):
             self.api.call(f"/api/internal/property/{lead_id}/", "PATCH",
                           {"auction_date": parse_date(values["Auction Date"]).isoformat()})
-        # DataSift's own "Property Temperature" (the snowflake/flame): a PATCH of hotness is accepted
-        # and silently ignored; the app saves it through its own route. 0 = cold (default), 3 warm, 5 hot
-        if values.get("Property Temperature") not in (None, ""):
-            self.api.call(f"/api/internal/property/{lead_id}/hotness/", "POST",
-                          {"hotness": int(float(values["Property Temperature"]))})
         if add_tags:
             attach_to_record(self.api, lead_id, {"tags": list(add_tags)})
         return problems
