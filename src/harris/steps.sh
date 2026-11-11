@@ -55,7 +55,12 @@ step() {
   return 0
 }
 
+# run_footer "$COMMIT": the run's own line, the log lines, and in a live run (a) the push of those lines to
+# the run-logs branch (a failed push is reported, never fails the run) and (c) an ALERT when a step was
+# blocked or failed, for the scheduled task to email right away. A --dry-run publishes and alerts nothing.
 run_footer() {
+  local live="${1:-}"
+  (cd src/harris && python3 -m crm.runlog --run-end "${RUN_NAME:-run}" "${#FAILED_STEPS[@]}" "${FAILED_STEPS[*]:-}") || true
   echo "== run log ($SIFT_RUN_ID)"
   (cd src/harris && python3 - "$SIFT_RUN_ID" <<'PY'
 import json, sys
@@ -65,12 +70,17 @@ rows.sort(key=lambda r: (r.get("status") not in ("blocked", "error"), r.get("ts_
 for r in rows:
     flag = "BLOCKED" if r.get("status") == "blocked" else "ERROR" if r.get("status") == "error" else "ok"
     print(f"  {flag:<7} {r.get('step') or r.get('task')}: {r.get('task')} | {r.get('mode')} | written {r.get('leads_written')}"
-          f" | batches {'yes' if r.get('batched') else 'no'}" + (f" | {r.get('error')}" if r.get("error") else ""))
+          f" | batches {'yes' if r.get('batched') else 'no'}" + (f" | {r.get('error')}" if r.get("error") else "")
+          + (f" | would be blocked: {r.get('would_block')}" if r.get("would_block") else ""))
 print("RUN LOG LINES:")
 for r in rows:
     print(json.dumps(r))
 PY
   ) || true
+  if [[ -n "$live" ]]; then
+    (cd src/harris && python3 -m crm.runlog --publish "$SIFT_RUN_ID") || echo "WARN: run log push failed (see above); the business steps are not affected"
+    (cd src/harris && python3 -m crm.runlog --alert "$SIFT_RUN_ID" "../../work/alert/$SIFT_RUN_ID") || true
+  fi
   if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
     echo "RUN STATUS: ${#FAILED_STEPS[@]} step(s) failed or blocked: ${FAILED_STEPS[*]}"
     return 1

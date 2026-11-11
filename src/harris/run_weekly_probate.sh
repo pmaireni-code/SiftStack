@@ -48,7 +48,7 @@ PY
 echo "== probate cases filed $FROM - $TO"
 step "probate cases" -- cases
 if [[ ! -s "$W/cases.json" ]] || [[ "$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$W/cases.json")" == "0" ]]; then
-  echo "RESULT: no new probate cases"; run_footer; exit $?
+  echo "RESULT: no new probate cases"; run_footer "$COMMIT"; exit $?
 fi
 step "hcad index"    -- hcad
 step "match"         needs work/hcad/idx.tsv -- match
@@ -56,4 +56,4 @@ step "market finder" -- market
 step "leads"         needs "$W/match.csv" "$W/market.json" -- leads
 step "upload"        needs "$W/leads.csv" -- upload
 step "result"        needs "$W/leads.csv" -- result
-run_footer
+run_footer "$COMMIT"

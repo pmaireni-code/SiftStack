@@ -50,4 +50,4 @@ step "deal grade"      needs "$W/market.json" -- grade
 step "probate assign"  -- probate        # Maireni Peguero, 14 days after the death
 step "phone priority"  -- phones         # Priority 1 / Blitz Active
 step "summary"         needs "$W/graded.csv" -- summary
-run_footer
+run_footer "$COMMIT"

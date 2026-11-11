@@ -86,8 +86,8 @@ def main(*flags):
                 continue
             changed += 1
             todo.append((lid, owner, p, new))
+    crm.plan([{"id": lid, "phone_tags_before": list(p["tags"]), "phone_tags_after": new} for lid, _, p, new in todo], commit)
     if commit:
-        crm.plan([{"id": lid, "phone_tags_before": list(p["tags"]), "phone_tags_after": new} for lid, _, p, new in todo])
         for lid, owner, p, new in todo:
             if crm.set_phone_tags(lid, owner, p, new):
                 written += 1

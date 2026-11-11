@@ -46,9 +46,9 @@ class GuardStop(SystemExit):
 
 
 class Blocked(GuardStop):
-    def __init__(self, reason, status="blocked"):
+    def __init__(self, reason, status="blocked", code="blocked"):
         super().__init__(3)
-        self.reason, self.status = reason, status
+        self.reason, self.status, self.code = reason, status, code
 
 
 class DryRunDone(GuardStop):
@@ -81,7 +81,8 @@ class Run:
         self.batched, self.batches = False, 0
         self.current = None
         self.intents = OrderedDict()   # lead id -> merged change, for the dry-run summary
-        self.status, self.error = None, ""
+        self.status, self.error, self.error_code = None, "", ""
+        self.would_block = ""
         self.sleep = time.sleep
 
     # ---- classification
@@ -110,15 +111,16 @@ class Run:
             ex = EXCEPTIONS.get((self.task, field)) if kind == "clear" else None
             if ex:
                 if not ex["ok"](ch.get("set") or {}):
-                    raise Blocked(f"{field} clear on {self._addr(lead)} is not allowed: only when {ex['why']}")
+                    raise Blocked(f"{field} clear on {self._addr(lead)} is not allowed: only when {ex['why']}",
+                                  code=f"exception_reason:{field}")
                 counts[("exc", field, lead)] = 1
                 if len({k[2] for k in counts if k[:2] == ("exc", field)}) > ex["max"]:
-                    raise Blocked(f"{self.task} may clear {field} on at most {ex['max']} leads per run")
+                    raise Blocked(f"{self.task} may clear {field} on at most {ex['max']} leads per run", code=f"exception_cap:{field}")
                 continue
             counts[("destructive", lead)] = 1
             if not self.allow_destructive and len([k for k in counts if k[0] == "destructive"]) > BULK_DESTRUCTIVE:
                 raise Blocked(f"{kind} {field!r} on more than {BULK_DESTRUCTIVE} leads needs explicit authorization "
-                              "(SIFT_ALLOW_DESTRUCTIVE=1 or --allow-destructive)")
+                              "(SIFT_ALLOW_DESTRUCTIVE=1 or --allow-destructive)", code=f"bulk_destructive:{kind}")
 
     def _addr(self, lead):
         return self.addresses.get(lead) or lead
@@ -129,8 +131,7 @@ class Run:
         "phone_tags_before", "phone_tags_after"}] (only what applies). Decides the mode; raises Blocked
         (nothing written) or, in a dry run, prints the summary and raises DryRunDone."""
         if not commit:
-            self.mode = self.mode or "dry-run (no --commit)"
-            return self
+            return self._preview(changes)
         leads = list(OrderedDict.fromkeys(c.get("id") or c.get("address") for c in changes))
         self.planned = len(leads)
         for c in changes:
@@ -141,7 +142,7 @@ class Run:
                 self.befores[k] = c["before"]
         try:
             if self.profile == "scheduled" and self.planned > self.ceiling:
-                raise Blocked(f"plan of {self.planned:,} leads is over the scheduled ceiling of {self.ceiling:,}", "error")
+                raise Blocked(f"plan of {self.planned:,} leads is over the scheduled ceiling of {self.ceiling:,}", "error", "ceiling")
             counts = Counter()
             for c in changes:
                 self._check(c.get("id") or c.get("address"), c, counts)
@@ -149,7 +150,7 @@ class Run:
                 self.mode = self.forced_mode or ("live" if self.planned <= DRY_THRESHOLD else "dry-run")
                 if self.mode == "live" and self.planned > self.max_records:
                     raise Blocked(f"plan of {self.planned:,} leads is over the per-run cap of {self.max_records:,} "
-                                  "(raise it for this task only with SIFT_MAX_RECORDS)")
+                                  "(raise it for this task only with SIFT_MAX_RECORDS)", code="cap")
             else:
                 self.mode = "live"
                 self.batched = self.planned > self.max_records
@@ -165,8 +166,26 @@ class Run:
             raise DryRunDone()
         return self
 
+    def _preview(self, changes):
+        """No --commit (run_*.sh --dry-run): nothing is written either way, but say what the brakes would
+        decide for this plan in a real run with the same profile."""
+        self.mode = self.mode or "dry-run (no --commit)"
+        self.planned = len(set(c.get("id") or c.get("address") for c in changes))
+        shadow = Run(task=self.task, out=lambda *_: None)
+        shadow.forced_mode = shadow.forced_mode or "live"
+        try:
+            shadow.plan(changes, True)
+            verdict = "would pass" + (f", in batches of {shadow.max_records}" if shadow.batched else "")
+        except Blocked as b:
+            self.would_block = b.reason
+            verdict = f"WOULD BE BLOCKED: {b.reason}"
+        except DryRunDone:
+            verdict = "would pass"
+        self.out(f"[guard] {self.task}: PREVIEW, nothing written ({self.profile}) - would touch {self.planned:,} leads | {verdict}")
+        return self
+
     def _block(self, b):
-        self.status, self.error = b.status, b.reason
+        self.status, self.error, self.error_code = b.status, b.reason, b.code
         self.out(f"[guard] BLOCKED {self.task}: {b.reason}. Nothing written by this step.")
         raise b
 
@@ -190,17 +209,17 @@ class Run:
             n = len(self.started)
             if self.mode == "live?" and n > DRY_THRESHOLD:
                 self._block(Blocked(f"more than {DRY_THRESHOLD} leads without a plan: run it with SIFT_MODE=live "
-                                    "(or dry-run first to see the summary)"))
+                                    "(or dry-run first to see the summary)", code="no_plan"))
             if self.profile == "scheduled":
                 if n > self.ceiling:
-                    self._block(Blocked(f"over the scheduled ceiling of {self.ceiling:,} leads", "error"))
+                    self._block(Blocked(f"over the scheduled ceiling of {self.ceiling:,} leads", "error", "ceiling"))
                 if n > 1 and (n - 1) % self.max_records == 0:
                     self.batched = True
                     self.batches += 1
                     self.out(f"[guard] batch {self.batches} done ({n - 1:,} leads); pausing {self.pause:.0f}s")
                     self.sleep(self.pause)
             elif self.mode in ("live", "live?") and n > self.max_records:
-                self._block(Blocked(f"over the per-run cap of {self.max_records:,} leads"))
+                self._block(Blocked(f"over the per-run cap of {self.max_records:,} leads", code="cap"))
         if self._destructive(change):
             self.destructive.add(lead)
         self.current = lead
@@ -264,7 +283,8 @@ class Run:
         if not self.is_write(method, headers):
             return None
         if method.upper() == "DELETE" and not self.allow_destructive:
-            self._block(Blocked(f"DELETE {path} needs explicit authorization (SIFT_ALLOW_DESTRUCTIVE=1 or --allow-destructive)"))
+            self._block(Blocked(f"DELETE {path} needs explicit authorization (SIFT_ALLOW_DESTRUCTIVE=1 or --allow-destructive)",
+                                code="delete"))
         if "/remove-tags/" in path or "/remove-lists/" in path:
             lead = (UUID.search(path) or [None, path])[1]
             try:
@@ -300,7 +320,8 @@ class Run:
         if mode == "live?":
             mode = "live"
         return {"run_id": os.environ.get("SIFT_RUN_ID") or "", "task": self.task, "profile": self.profile, "mode": mode,
-                "status": self.status or "ok", "error": self.error, "planned": self.planned,
+                "status": self.status or "ok", "error": self.error, "error_code": self.error_code,
+                "would_block": self.would_block, "planned": self.planned,
                 "leads_read": len(self.read_ids), "leads_written": len(self.written), "api_calls": self.api_calls,
                 "rejected_by_verification": len(self.rejected), "destructive_leads": len(self.destructive),
                 "batched": self.batched, "batches": self.batches + (1 if self.batched else 0),

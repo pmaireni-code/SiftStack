@@ -304,7 +304,7 @@ run_footer
         self.assertIn("BLOCKED", p.stdout)
         self.assertIn("RUN LOG LINES:", p.stdout)
         rows = self.lines()
-        self.assertEqual([(r["step"], r["status"]) for r in rows], [("bid updater", "blocked")])
+        self.assertEqual([(r["step"], r["status"]) for r in rows], [("bid updater", "blocked"), ("(whole run)", "error")])
         self.assertEqual(rows[0]["profile"], "scheduled")
 
     def test_step_dying_without_a_line_gets_one(self):
@@ -339,6 +339,127 @@ class Email(unittest.TestCase):
     def test_clean_day_has_a_plain_subject(self):
         _, _, problems = runlog.digest(self.ROWS[:2])
         self.assertEqual(runlog.subject_tag(problems), "")
+
+
+def git_fixture(tmp):
+    """A bare 'origin' and a clone of it with one commit on main: the run-logs branch is pushed THERE, never
+    to GitHub."""
+    remote, clone = os.path.join(tmp, "origin.git"), os.path.join(tmp, "clone")
+    run = lambda *a, cwd=None: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+    run("init", "-q", "--bare", remote)
+    run("init", "-q", "-b", "main", clone)
+    open(os.path.join(clone, "x.txt"), "w").write("x")
+    run("add", "x.txt", cwd=clone)
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init", cwd=clone)
+    run("remote", "add", "origin", remote, cwd=clone)
+    run("push", "-q", "origin", "main", cwd=clone)
+    return clone
+
+
+class RunLogsBranch(unittest.TestCase):
+    TODAY = date(2026, 11, 12)
+    ROWS = [{"ts_start": "2026-11-12T12:44:00+00:00", "run_id": "daily-20261112T124400Z", "step": "bid updater",
+             "task": "harris_bid_updater", "profile": "scheduled", "mode": "live", "status": "blocked",
+             "error": "Starting Bid clear on 9 Oak St is not allowed", "error_code": "exception_reason:Starting Bid",
+             "leads_written": 0, "batched": False},
+            {"ts_start": "2026-11-12T12:50:00+00:00", "run_id": "daily-20261112T124400Z", "step": "deal grade",
+             "task": "harris_grade", "profile": "scheduled", "mode": "live", "status": "ok", "error": "",
+             "leads_written": 14, "batched": False}]
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ["SIFT_RUNLOG_GIT_DIR"] = git_fixture(self.tmp)
+
+    def tearDown(self):
+        os.environ.pop("SIFT_RUNLOG_GIT_DIR", None)
+
+    def test_published_lines_carry_no_address_and_are_read_back(self):
+        ok, msg = runlog.publish(self.ROWS, sleep=lambda s: None)
+        self.assertTrue(ok, msg)
+        got = runlog.fetch_day(self.TODAY)
+        self.assertEqual([r["step"] for r in got], ["bid updater", "deal grade"])
+        self.assertNotIn("Oak", json.dumps(got), "the repo is public: no address in a published line")
+        self.assertIn("exception_reason:Starting Bid", got[0]["error"])
+        ok, _ = runlog.publish([dict(self.ROWS[1], step="phone priority")], sleep=lambda s: None)
+        self.assertTrue(ok)
+        self.assertEqual(len(runlog.fetch_day(self.TODAY)), 3, "a second run appends to the day's file")
+
+    def test_b_report_reads_the_day_from_the_branch(self):
+        import daily_caller_report as R
+        runlog.publish(self.ROWS, sleep=lambda s: None)
+        html, text, problems, got = R.automation_section(self.TODAY)
+        self.assertTrue(got)
+        self.assertEqual(problems, [("blocked", "bid updater")])
+        self.assertTrue(runlog.subject_tag(problems, got).startswith("[BLOCKED: bid updater]"))
+
+    def test_b_missing_day_says_so_in_the_subject(self):
+        import daily_caller_report as R
+        runlog.publish(self.ROWS, sleep=lambda s: None)  # another day's file exists; today's does not
+        html, text, problems, got = R.automation_section(date(2026, 11, 13))
+        self.assertFalse(got)
+        subject = runlog.subject_tag(problems, got) + "Daily Report - Charles Cator - November 13, 2026"
+        self.assertTrue(subject.startswith("[NO RUN LOG RECEIVED TODAY] "))
+        self.assertIn("No run log was received for today's runs", html)
+        self.assertIn("No run log was received", text)
+
+    def test_b_weekly_lines_without_the_daily_still_count_as_missing(self):
+        import daily_caller_report as R
+        runlog.publish([dict(self.ROWS[1], run_id="weekly-20261112T101700Z")], sleep=lambda s: None)
+        _, _, problems, got = R.automation_section(self.TODAY)
+        self.assertFalse(got)
+
+    def test_push_failure_is_reported_not_raised(self):
+        subprocess.run(["git", "remote", "set-url", "origin", "/nonexistent/repo.git"], cwd=os.environ["SIFT_RUNLOG_GIT_DIR"])
+        ok, msg = runlog.publish(self.ROWS, sleep=lambda s: None)
+        self.assertFalse(ok)
+        self.assertIn("failed", msg)
+
+
+class ImmediateAlert(unittest.TestCase):
+    def test_c_alert_names_the_blocked_step(self):
+        subject, text, html = runlog.alert(RunLogsBranch.ROWS)
+        self.assertTrue(subject.startswith("[BLOCKED] Harris automation daily-20261112T124400Z: bid updater"))
+        self.assertIn("Starting Bid clear on 9 Oak St", text, "the private alert keeps the full reason")
+        self.assertIn("The other steps ran: deal grade", text)
+
+    def test_c_no_alert_on_a_clean_run(self):
+        self.assertIsNone(runlog.alert(RunLogsBranch.ROWS[1:]))
+
+    def test_c_live_run_alerts_at_the_end_and_still_runs_every_step(self):
+        tmp = tempfile.mkdtemp()
+        clone = git_fixture(tmp)
+        script = os.path.join(tmp, "fake_task.py")
+        with open(script, "w") as f:
+            f.write(SCRIPT.format(harris=os.path.abspath(HARRIS)))
+        root = os.path.abspath(os.path.join(HARRIS, "..", ".."))
+        sh = f"""
+set -euo pipefail
+cd {root!r}
+RUN_NAME=daily; source src/harris/steps.sh
+blocked() {{ python3 {script!r} blocked; }}
+grade()   {{ python3 {script!r} ok; }}
+step "bid updater" -- blocked
+step "deal grade" -- grade
+run_footer --commit
+"""
+        env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
+        log = os.path.join(tmp, "run_log.jsonl")
+        env.update(SIFT_RUN_LOG=log, SIFT_RUN_ID="daily-test", SIFT_RUNLOG_GIT_DIR=clone)
+        p = subprocess.run(["bash", "-c", sh], env=env, capture_output=True, text=True)
+        out = p.stdout
+        self.assertEqual(p.returncode, 1, out + p.stderr)
+        self.assertIn("ALERT_SUBJECT: [BLOCKED] Harris automation daily-test: bid updater", out)
+        alert_txt = os.path.join(root, "work", "alert", "daily-test.txt")
+        self.assertTrue(os.path.exists(alert_txt))
+        self.assertIn("run log pushed to run-logs", out)
+        from datetime import datetime, timezone
+        houston_today = runlog.houston_day(datetime.now(timezone.utc).isoformat())
+        shown = subprocess.run(["git", "show", "origin/run-logs:" + runlog.day_file(houston_today)], cwd=clone,
+                               capture_output=True, text=True).stdout
+        steps = [json.loads(l)["step"] for l in shown.splitlines()]
+        self.assertEqual(sorted(steps), ["(whole run)", "bid updater", "deal grade"])
+        os.remove(alert_txt)
+        os.remove(alert_txt[:-4] + ".html")
 
 
 if __name__ == "__main__":

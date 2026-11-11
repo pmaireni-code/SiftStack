@@ -56,11 +56,11 @@ result()   { echo "RESULT: $(grep -c . "$W/leads.csv" | awk '{print $1-1}') lead
 
 echo "== notices filed in the last $SINCE_DAYS days for sales ${MONTHS[*]}"
 step "notices" -- notices
-if ! ls "$W"/notices/*.pdf >/dev/null 2>&1; then echo "RESULT: no new notices this week"; run_footer; exit $?; fi
+if ! ls "$W"/notices/*.pdf >/dev/null 2>&1; then echo "RESULT: no new notices this week"; run_footer "$COMMIT"; exit $?; fi
 step "hcad index" -- hcad
 step "ocr"        -- ocr
 step "match"      needs work/hcad/idx.tsv -- match
 step "bids"       needs "$W/leads.csv" -- bids
 step "upload"     needs "$W/leads.csv" -- upload
 step "result"     needs "$W/leads.csv" -- result
-run_footer
+run_footer "$COMMIT"

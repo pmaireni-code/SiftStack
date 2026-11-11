@@ -38,12 +38,26 @@ HOT = {"hot lead", "warm lead"}
 esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _houston_day(ts):
-    """ISO UTC timestamp -> its Houston calendar date (None when unreadable)."""
-    try:
-        return datetime.fromisoformat(ts).astimezone(HOU).date()
-    except (TypeError, ValueError):
-        return None
+def automation_section(day, path=None):
+    """-> (html, text, problems, log received). Reads the day's published run log (or a local file); a day with
+    no file, or with no daily run in it, is reported as "no run log received"."""
+    rows = runlog.read(path) if path else runlog.fetch_day(day)
+    if rows is not None:
+        rows = [r for r in rows if r.get("profile") == "scheduled" and runlog.houston_day(r.get("ts_start")) == day]
+    if not rows or not any((r.get("run_id") or "").startswith("daily-") for r in rows):
+        missing = ("No run log was received for today's runs" if not rows else
+                   "No run log was received from today's daily run") + " (not a confirmation that they succeeded)."
+        html, text, problems = runlog.digest(rows or [])
+        html = html.replace("<h3>Automation runs</h3>", '<h3>Automation runs</h3><p style="color:#b00020;font-weight:bold">'
+                            + missing + "</p>", 1)
+        if not rows:
+            html = '<h3>Automation runs</h3><p style="color:#b00020;font-weight:bold">' + missing + "</p>"
+            text = "Automation runs: " + missing
+        else:
+            text = missing + "\n" + text
+        return html, text, problems, False
+    html, text, problems = runlog.digest(rows)
+    return html, text, problems, True
 
 
 def main(*flags):
@@ -162,12 +176,11 @@ def main(*flags):
              if first else "no outbound calls")
     talk = round(sum(c["dur"] for c in answered) / 60)
     name = user.title()
-    # The day's automation steps from the run log (crm/runlog.py), blocked and failed first; a blocked or
-    # failed step is named in the subject. --run-log points at a copy brought from the run's container.
-    run_rows = [r for r in runlog.read(flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
-                if r.get("profile") == "scheduled" and _houston_day(r.get("ts_start")) == day]
-    runs_html, runs_text, run_problems = runlog.digest(run_rows)
-    subject = runlog.subject_tag(run_problems) + f"Daily Report - {name} - {day:%B %-d, %Y}"
+    # The day's automation steps, from the run-logs branch where each scheduled run pushes its lines
+    # (crm/runlog.py); --run-log FILE reads a local file instead. Blocked and failed steps come first and are
+    # named in the subject; no log at all for the day is said in the subject too, never shown as a quiet day.
+    runs_html, runs_text, run_problems, got_log = automation_section(day, flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
+    subject = runlog.subject_tag(run_problems, got_log) + f"Daily Report - {name} - {day:%B %-d, %Y}"
     summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
                f"and had {len(convo)} conversations with owners.")
     rows = [("Leads worked", len(worked)), ("Outbound calls", len(out_calls)),

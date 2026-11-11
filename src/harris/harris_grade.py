@@ -153,13 +153,13 @@ def main(market_path, out_path, *flags):
             l["_temperature"] = INITIAL_TEMPERATURE[l["Deal Grade"]]
     changed = [l for l, b in zip(leads, before) if any((l.get(k) or "") != (b.get(k) or "") for k in GRADE_FIELDS)]
     print(f"CRM: {len(changed)} leads with a new grade")
-    if commit:  # safety brakes (crm/guard.py)
-        crm.plan([{"id": l["id"], "address": l["Property Street Address"],
-                   "set": {**{k: l.get(k) or "" for k in GRADE_FIELDS},
-                           **({"Property Temperature": l["_temperature"]} if l.get("_temperature") else {})},
-                   "before": {k: b.get(k) or "" for k in GRADE_FIELDS},
-                   "add_tags": [FLOOD_TAG] if l.get("_flood_tag") and FLOOD_TAG not in (l.get("Tags") or "") else []}
-                  for l, b in zip(leads, before) if l in changed])
+    # safety brakes (crm/guard.py); without --commit a preview of what they would decide
+    crm.plan([{"id": l["id"], "address": l["Property Street Address"],
+               "set": {**{k: l.get(k) or "" for k in GRADE_FIELDS},
+                       **({"Property Temperature": l["_temperature"]} if l.get("_temperature") else {})},
+               "before": {k: b.get(k) or "" for k in GRADE_FIELDS},
+               "add_tags": [FLOOD_TAG] if l.get("_flood_tag") and FLOOD_TAG not in (l.get("Tags") or "") else []}
+              for l, b in zip(leads, before) if l in changed], commit)
     for l in changed:
         what = f"{l['Deal Grade']} | {l['Deal Notes'][:90]}"
         if not commit:
