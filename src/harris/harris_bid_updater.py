@@ -85,7 +85,13 @@ def push_to_crm(rows, commit, before):
     print(f"CRM: {len(changed)} of {len(rows)} leads changed today")
     if not changed:
         return
-    crm = get_crm() if commit else None
+    crm = get_crm()
+    # safety brakes: the whole day's write-back is checked before the first write (crm/guard.py); without
+    # --commit this only previews what the brakes would decide
+    crm.plan([{"id": r["id"], "address": r["Property Street Address"],
+               "set": {k: r.get(k) or "" for k in DAILY_FIELDS}, "before": {k: b.get(k) or "" for k in DAILY_FIELDS},
+               "add_tags": [t for t in DAILY_TAGS if t in r.get("Tags", "") and t not in b.get("Tags", "")]}
+              for r, b in changed if r.get("id")], commit)
     for r, b in changed:
         what = ", ".join(f"{k}={r.get(k) or '-'}" for k in DAILY_FIELDS)
         if not r.get("id"):

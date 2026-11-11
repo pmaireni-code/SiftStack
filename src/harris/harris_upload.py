@@ -20,6 +20,7 @@ def main(path, *flags):
     rows = list(csv.DictReader(open(path, encoding="utf-8")))[start:][: limit or None]
     crm = get_crm()
     print(f"[{'COMMIT' if commit else 'DRY RUN'}] {len(rows)} leads -> {crm.name}\n")
+    crm.plan_rows(rows, commit)  # safety brakes (crm/guard.py)
     ok = failed = 0
     for i, row in enumerate(rows, 1):
         try:

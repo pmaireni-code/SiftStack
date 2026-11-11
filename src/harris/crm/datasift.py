@@ -16,6 +16,7 @@ from datasift_api_upload import Api, ApiError, attach_to_record, build_property,
 
 from harris_status import parse_date  # noqa: E402
 
+from . import guard  # noqa: E402
 from .base import CRM  # noqa: E402
 
 # Lead column -> DataSift custom-field label (the account's "Foreclosure" group)
@@ -40,9 +41,22 @@ NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqF
 
 class PatientApi(Api):
     """DataSift throttles /api/internal/ hard (~2 req/s). Wait out a 429 or a 5xx, honouring the
-    server's "available in N seconds" hint, instead of counting a throttled call as a failed lead."""
+    server's "available in N seconds" hint, instead of counting a throttled call as a failed lead.
+    Every call is shown to the run's safety brakes first (crm/guard.py): a dry run skips the write and gets
+    a placeholder answer, an unauthorized DELETE stops the step."""
 
     def call(self, path, method="GET", body=None, _retry=True, headers=None):
+        run = guard.current()
+        if _retry:  # Api.call re-enters with _retry=False after a 401: one logical call
+            skip = run.on_call(method, path, headers)
+            if skip is not None:
+                return skip
+        res = self._send(path, method, body, _retry, headers)
+        if _retry:
+            run.after_call(method, path, headers, res)
+        return res
+
+    def _send(self, path, method, body, _retry, headers):
         for attempt in range(6):
             try:
                 return super().call(path, method, body, _retry, headers)
@@ -51,6 +65,20 @@ class PatientApi(Api):
                     raise
                 hint = re.search(r"(\d+) second", e.body or "")
                 time.sleep(int(hint.group(1)) + 1 if hint else 2 ** attempt)
+
+
+def _lead_key(row):
+    """An upload row has no CRM id yet: the brakes count it by its address."""
+    return " ".join(str(row.get(k) or "").strip() for k in ("Property Street Address", "Property ZIP Code")).strip()
+
+
+def _upsert_change(row):
+    """What upsert_lead adds, for the brakes and the dry-run summary: fields with a value, tags, the list.
+    An upload never clears a field (empty columns are skipped)."""
+    sets = {k: row[k] for k in list(FIELDS) + list(NATIVE) if (row.get(k) or "").strip()}
+    if row.get("Lists"):
+        sets["List"] = row["Lists"]
+    return {"create": True, "set": sets, "add_tags": [t.strip() for t in (row.get("Tags") or "").split(",") if t.strip()]}
 
 
 def _iso_to_us(v):
@@ -64,6 +92,11 @@ class DataSiftCRM(CRM):
     def __init__(self):
         self.api = PatientApi()
         self.fields = field_index(self.api)
+
+    # ---- safety brakes (plan / plan_rows come from CRM)
+    @staticmethod
+    def row_change(row):
+        return dict(_upsert_change(row), address=_lead_key(row))
 
     # ---- writing
     def _custom_values(self, row, problems, only=None):
@@ -168,6 +201,9 @@ class DataSiftCRM(CRM):
         if not commit:
             return {"id": "", "created": False, "problems": problems,
                     "preview": f"payload: {prop}\nnative: {native}\ncustom: {[(v['_label'], v['value']) for v in values]}"}
+        run, key = guard.current(), _lead_key(row)
+        if run.before_write(key, _upsert_change(row), row.get("Property Street Address", "")):
+            return {"id": "DRY-RUN", "created": False, "problems": problems, "dry_run": True}
         # "Keep Owner On Existing": a record that already exists (a foreclosure lead on the same house) keeps
         # its owner; only lists, tags, fields and the note are added. create_property would PATCH the owner
         existing = self.find_lead(row) if row.get("Keep Owner On Existing") == "Yes" else ""
@@ -203,6 +239,8 @@ class DataSiftCRM(CRM):
                 if int(got or 0) != int(float(temp)):
                     problems.append(f"temperature: sent {temp}, reads {got}")
         problems += self._read_back(uuid, values, native, row)
+        if problems:
+            run.reject(key)
         return {"id": uuid, "created": not res.get("existing"), "problems": problems}
 
     # ---- reading
@@ -309,15 +347,25 @@ class DataSiftCRM(CRM):
         uid = self._users().get(user_name.strip().lower())
         if not uid:
             raise SystemExit(f"no DataSift user named {user_name!r}")
+        run = guard.current()
+        if run.before_write(lead_id, {"assign": user_name}):
+            return True
         self.api.call(f"/api/internal/property/{lead_id}/", "PATCH", {"assigned_to": uid})
         a = self.api.call(f"/api/internal/property/{lead_id}/").get("assigned_to")
-        return (a.get("uuid") if isinstance(a, dict) else a) == uid
+        ok = (a.get("uuid") if isinstance(a, dict) else a) == uid
+        if not ok:
+            run.reject(lead_id)
+        return ok
 
     # ---- phone priority (phone_priority.py)
     def read_phones(self, lead_id):
         """(owner uuid, [phone dicts]) from the record detail. A phone is {number, type, status, tags,
         is_connected}; tags may come back as names or {name}/{title} objects."""
-        o = self.api.call(f"/api/internal/property/{lead_id}/").get("owner") or {}
+        rec = self.api.call(f"/api/internal/property/{lead_id}/")
+        o = rec.get("owner") or {}
+        street = (rec.get("address") or {}).get("street")
+        if street:  # the dry-run summary names leads by address
+            guard.current().addresses.setdefault(lead_id, street)
         phones = []
         for p in o.get("phones") or []:
             p = dict(p)
@@ -330,11 +378,18 @@ class DataSiftCRM(CRM):
         status and connection flag are carried through unchanged; only the tags change. Read back."""
         payload = {"number": phone["number"], "type": phone.get("type") or "UNKNOWN", "tags": list(tags),
                    "status": (phone.get("status") or "UNKNOWN").upper(), "is_connected": phone.get("is_connected", True)}
+        # A tier swap is a change; a phone left with no tier (or a non-tier tag dropped) is a tag removal
+        run = guard.current()
+        if run.before_write(lead_id, {"phone_tags_before": list(phone.get("tags") or []), "phone_tags_after": list(tags)}):
+            return True
         self.api.call(f"/api/internal/owner/{owner_uuid}/upsert-phones/", "POST", {"phones": [payload]})
         _, after = self.read_phones(lead_id)
         got = next((p for p in after if p["number"] == phone["number"]), None)
-        return bool(got) and sorted(got["tags"]) == sorted(tags) and got.get("type") == payload["type"] \
+        ok = bool(got) and sorted(got["tags"]) == sorted(tags) and got.get("type") == payload["type"] \
             and (got.get("status") or "").upper() == payload["status"]
+        if not ok:
+            run.reject(lead_id)
+        return ok
 
     # ---- activity (daily_caller_report.py)
     def lead_activity(self, lead_id):
@@ -356,6 +411,8 @@ class DataSiftCRM(CRM):
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
+        if guard.current().before_write(lead_id, {"set": dict(values), "add_tags": list(add_tags or [])}):
+            return problems
         cvals = self._custom_values(values, problems, only=tuple(values))
         if cvals:  # a tags-only update (probate_assign.py) sends no field values
             self.api.call(f"/api/internal/property/{lead_id}/custom-field/update-values/", "PATCH",

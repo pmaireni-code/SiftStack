@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from crm import get_crm  # noqa: E402
+from crm import get_crm, runlog  # noqa: E402
 
 HOU = ZoneInfo("America/Chicago")
 # Notes that only say nobody was reached, including cut-off words and joins ("Wrong numb", "No response.",
@@ -36,6 +36,28 @@ DNC_WORDS = re.compile(r"\bDNC\b|do not call|don'?t call|stop calling|remove (me
                        r"taken out (from|of) (the )?list|remove(d)? from (the )?list", re.I)
 HOT = {"hot lead", "warm lead"}
 esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def automation_section(day, path=None):
+    """-> (html, text, problems, log received). Reads the day's published run log (or a local file); a day with
+    no file, or with no daily run in it, is reported as "no run log received"."""
+    rows = runlog.read(path) if path else runlog.fetch_day(day)
+    if rows is not None:
+        rows = [r for r in rows if r.get("profile") == "scheduled" and runlog.houston_day(r.get("ts_start")) == day]
+    if not rows or not any((r.get("run_id") or "").startswith("daily-") for r in rows):
+        missing = ("No run log was received for today's runs" if not rows else
+                   "No run log was received from today's daily run") + " (not a confirmation that they succeeded)."
+        html, text, problems = runlog.digest(rows or [])
+        html = html.replace("<h3>Automation runs</h3>", '<h3>Automation runs</h3><p style="color:#b00020;font-weight:bold">'
+                            + missing + "</p>", 1)
+        if not rows:
+            html = '<h3>Automation runs</h3><p style="color:#b00020;font-weight:bold">' + missing + "</p>"
+            text = "Automation runs: " + missing
+        else:
+            text = missing + "\n" + text
+        return html, text, problems, False
+    html, text, problems = runlog.digest(rows)
+    return html, text, problems, True
 
 
 def main(*flags):
@@ -154,7 +176,11 @@ def main(*flags):
              if first else "no outbound calls")
     talk = round(sum(c["dur"] for c in answered) / 60)
     name = user.title()
-    subject = f"Daily Report - {name} - {day:%B %-d, %Y}"
+    # The day's automation steps, from the run-logs branch where each scheduled run pushes its lines
+    # (crm/runlog.py); --run-log FILE reads a local file instead. Blocked and failed steps come first and are
+    # named in the subject; no log at all for the day is said in the subject too, never shown as a quiet day.
+    runs_html, runs_text, run_problems, got_log = automation_section(day, flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
+    subject = runlog.subject_tag(run_problems, got_log) + f"Daily Report - {name} - {day:%B %-d, %Y}"
     summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
                f"and had {len(convo)} conversations with owners.")
     rows = [("Leads worked", len(worked)), ("Outbound calls", len(out_calls)),
@@ -170,11 +196,13 @@ def main(*flags):
             + "<h3>Conversations with owners</h3>"
             + (tbl(["Lead", "Note", "Status"], [(c["street"], c["note"], c["status"]) for c in convo]) if convo else "<p>None today.</p>")
             + "<h3>To do</h3>" + ("<ol>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>" if todo else "<p>Nothing pending from today's records.</p>")
+            + runs_html
             + f"<p><i>Source: DataSift activity logs (smrtPhone calls, notes, statuses, phone dispositions) for {day:%B %-d, %Y}, Houston time.</i></p>")
     strip = lambda s: re.sub(r"<[^>]+>", "", s)
     text = (f"Hi Maireni,\n\nSummary: {summary}\n\nResults: " + "; ".join(f"{k}: {v}" for k, v in rows)
             + "\n\nConversations:\n" + ("\n".join(f"- {c['street']}: {c['note']} ({c['status']})" for c in convo) or "None today.")
             + "\n\nTo do:\n" + ("\n".join(f"{i}. {strip(t)}" for i, t in enumerate(todo, 1)) or "Nothing pending.")
+            + "\n\n" + runs_text
             + f"\n\nSource: DataSift activity logs for {day:%B %-d, %Y}, Houston time.")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     open(out + ".html", "w").write(html)

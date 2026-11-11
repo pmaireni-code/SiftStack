@@ -76,6 +76,7 @@ def upload(rows, crm, commit, list_name, label, schema_fn):
     print(f"[{'COMMIT' if commit else 'DRY RUN'}] {len(rows)} {label} leads -> {crm.name}, list {list_name!r}")
     if not commit:
         print("would create: " + ("; ".join(todo) or "nothing, schema in place"))
+    crm.plan_rows(rows, commit)  # safety brakes (crm/guard.py)
     new = existing = failed = 0
     for i, row in enumerate(rows, 1):
         try:
