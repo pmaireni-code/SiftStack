@@ -35,6 +35,10 @@ import time
 import urllib.error
 import urllib.request
 
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import account_lock  # noqa: E402  (src/account_lock.py)
+
 BASE = "https://apiv2.reisift.io"
 CREATE_ROUTE = "/api/internal/property/"   # verified open 2026-09-05
 LEGACY_CREATE_ROUTE = "/property/"          # Open API; 403 for everyone since 2026-09-01
@@ -133,6 +137,10 @@ class Api:
         # JWTs are short-lived; refresh transparently rather than dying mid-run.
         if time.time() - self.minted > 1800:
             self._mint()
+        # Account lock (account_lock.py): a write goes only to the account this program declared it was
+        # written for; an undeclared program or another account is refused before the first write.
+        if account_lock.is_write(method, headers):
+            account_lock.check_write(self.token, method, path)
         data = json.dumps(body).encode() if body is not None else None
         hdrs = {"Authorization": "Bearer " + self.token,
                 "Content-Type": "application/json"}

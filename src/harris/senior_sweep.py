@@ -21,11 +21,10 @@ Contract, verified live 2026-11-01 by count delta (an unknown key is SILENTLY ig
 """
 import json, os, sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path[:0] = [os.path.dirname(os.path.abspath(__file__)), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")]
 from datasift_api_upload import Api  # noqa: E402
-import siftmap_pull as sp  # noqa: E402
+import siftmap_read as sp  # noqa: E402  (read-only SiftMap search; siftmap_pull is archived)
 
-sp.COUNTIES["48201"] = {"name": "Harris", "state": "TX"}
 MAX_VALUE = 300000   # operator's cap, 2026-11-01
 MIN_AGE, OLDER = 75, 80
 PAGE = 250

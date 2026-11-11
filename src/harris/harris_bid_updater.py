@@ -23,7 +23,7 @@ SAME_SALE_DAYS = 3
 
 
 def addr_key(street):
-    """'4422 Sandhill Terrace Lane' -> ('4422', 'SANDHILL TERRACE LN'), units dropped."""
+    """'123 Example Terrace Lane' -> ('123', 'EXAMPLE TER LN'), units dropped."""
     s = re.sub(r"[^A-Z0-9 ]", " ", (street or "").upper())
     s = re.sub(r"\b(UNIT|APT|STE|#)\b.*$", "", s)
     toks = [SUFFIX.get(t, t) for t in s.split()]

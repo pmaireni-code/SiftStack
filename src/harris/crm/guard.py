@@ -49,7 +49,7 @@ class GuardStop(SystemExit):
 class Blocked(GuardStop):
     def __init__(self, reason, status="blocked", code="blocked"):
         super().__init__(3)
-        self.reason, self.status, self.code = reason, status, code
+        self.reason, self.status, self.kind = reason, status, code  # not .code: SystemExit's exit status
 
 
 class DryRunDone(GuardStop):
@@ -186,7 +186,7 @@ class Run:
         return self
 
     def _block(self, b):
-        self.status, self.error, self.error_code = b.status, b.reason, b.code
+        self.status, self.error, self.error_code = b.status, b.reason, b.kind
         self.out(f"[guard] BLOCKED {self.task}: {b.reason}. Nothing written by this step.")
         raise b
 

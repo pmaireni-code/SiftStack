@@ -50,7 +50,7 @@ def split_name(full):
 
 
 def addr_key(street_line, zip_code=""):
-    """('4234 Tasselwood Lane', '77014') -> ('4234', 'TASSELWOOD', '77014'). Number + first street word +
+    """('123 Sample Lane', '77000') -> ('123', 'SAMPLE', '77000'). Number + first street word +
     ZIP: without the ZIP, 100 OAK HILL DR and 100 OAK RIDGE CIR are one key."""
     t = re.sub(r"[^A-Z0-9 ]", " ", (street_line or "").upper()).split()
     if len(t) < 2 or not t[0].isdigit():

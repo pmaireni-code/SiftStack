@@ -55,7 +55,7 @@ class NoNetwork(unittest.TestCase):
             r = guard.reset(guard.Run(task="anything", out=lambda *_: None))
             with self.assertRaises(guard.Blocked) as e:
                 r.on_call("POST", "/api/internal/property/skip-trace/", {})
-            self.assertEqual(e.exception.code, "skiptrace_forbidden")
+            self.assertEqual(e.exception.kind, "skiptrace_forbidden")
         for k in ("SIFT_PROFILE", "SIFT_ALLOW_DESTRUCTIVE", "SIFT_MODE"):
             os.environ.pop(k, None)
 

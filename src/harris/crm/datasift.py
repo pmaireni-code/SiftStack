@@ -164,7 +164,7 @@ class DataSiftCRM(CRM):
                 same = float(got) == float(val)
             except (TypeError, ValueError):
                 same = str(got) == str(val)
-            if key == "apn":  # DataSift stores the APN with dashes ("130-618-001-0009")
+            if key == "apn":  # DataSift stores the APN with dashes ("123-456-789-0000")
                 same = "".join(c for c in str(got) if c.isdigit()) == str(val)
             if key == "estimate_value" and not same and got not in (None, ""):
                 continue  # DataSift's own enrichment can replace HCAD's value; HCAD's stays in the notes
