@@ -336,6 +336,23 @@ class DataSiftCRM(CRM):
         return bool(got) and sorted(got["tags"]) == sorted(tags) and got.get("type") == payload["type"] \
             and (got.get("status") or "").upper() == payload["status"]
 
+    # ---- activity (daily_caller_report.py)
+    def lead_activity(self, lead_id):
+        """The record's activity log: property events (notes, status, attempts, tasks) + its owner's events
+        (smrtPhone calls, SMS, phone dispositions), from GET /property/{uuid}/logs/ and /owner/{uuid}/logs/
+        (verified live 2026-11-10). Each event: event_type, author, source, timestamp (UTC), payload."""
+        d = self.api.call(f"/api/internal/property/{lead_id}/")
+        owner = (d.get("owner") or {}).get("uuid")
+        out = []
+        for path in [f"/api/internal/property/{lead_id}/logs/"] + ([f"/api/internal/owner/{owner}/logs/"] if owner else []):
+            url = path
+            while url:
+                r = self.api.call(url)
+                out += r.get("data") or r.get("results") or []
+                nxt = r.get("next")
+                url = nxt.split("reisift.io", 1)[-1] if nxt else None
+        return d, out
+
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
