@@ -194,6 +194,18 @@ class Limits(unittest.TestCase):
         self.assertEqual(r.mode, "live")
 
 
+class Counting(unittest.TestCase):
+    def test_leads_read_counts_property_records_only(self):
+        r = run_as("harris_grade", SIFT_PROFILE="scheduled")
+        r.after_call("POST", "/api/internal/property/", {"x-http-method-override": "GET"},
+                     {"results": [{"uuid": lead(1)}, {"uuid": lead(2)}]})
+        r.after_call("GET", f"/api/internal/property/{lead(1)}/custom-field/", None,
+                     {"results": [{"uuid": lead(90)}, {"uuid": lead(91)}]})
+        r.after_call("GET", f"/api/internal/owner/{lead(80)}/logs/", None, {"results": []})
+        r.after_call("GET", f"/api/internal/property/{lead(3)}/", None, {"uuid": lead(3)})
+        self.assertEqual(r.record()["leads_read"], 3)
+
+
 class DryRun(unittest.TestCase):
     def test_c_dry_run_writes_nothing_and_returns_the_summary(self):
         out = []

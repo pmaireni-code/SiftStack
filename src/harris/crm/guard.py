@@ -22,6 +22,7 @@ from datetime import date
 DRY_THRESHOLD = 10
 BULK_DESTRUCTIVE = 10
 TIER_TAGS = {"Dial First", "Dial Second", "Dial Third", "Dial Fourth", "Drop"}
+PROPERTY_UUID = re.compile(r"/api/internal/property/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/")
 UUID = re.compile(r"/(?:property|owner)/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/")
 
 
@@ -303,10 +304,12 @@ class Run:
             if lead:
                 self.written.add(lead)
             return
-        m = UUID.search(path)
+        # leads read = property records: a record detail, or the rows of a records search (custom-field
+        # rows and owner records carry uuids too, and are not leads)
+        m = PROPERTY_UUID.search(path)
         if m:
             self.read_ids.add(m.group(1))
-        if isinstance(res, dict):
+        elif path.split("?")[0] == "/api/internal/property/" and isinstance(res, dict):
             for r in res.get("results") or res.get("data") or []:
                 if isinstance(r, dict) and r.get("uuid"):
                     self.read_ids.add(r["uuid"])
