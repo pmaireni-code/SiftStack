@@ -154,6 +154,25 @@ class Archived(unittest.TestCase):
             self.assertEqual(p.returncode, 2, m)
             self.assertIn("REFUSED", p.stdout, m)
 
+    def test_other_account_scripts_are_archived_and_refuse(self):
+        for m in ("staging_build_39049", "list_inventory_report"):
+            self.assertFalse(os.path.exists(os.path.join(ROOT, "src", m + ".py")), m)
+            p = subprocess.run([sys.executable, os.path.join(ROOT, "archive", "other_accounts", m + ".py")],
+                               capture_output=True, text=True)
+            self.assertEqual(p.returncode, 2, m)
+            self.assertIn("REFUSED", p.stdout, m)
+
+    def test_nothing_left_in_src_imports_an_archived_module(self):
+        import re
+        gone = self.MODULES + ("staging_build_39049", "list_inventory_report", "strip_bulk_lists")
+        pat = re.compile(r"^\s*(?:import|from)\s+(" + "|".join(gone) + r")\b", re.M)
+        bad = []
+        for d, _, files in os.walk(os.path.join(ROOT, "src")):
+            for f in files:
+                if f.endswith(".py") and pat.search(open(os.path.join(d, f), errors="replace").read()):
+                    bad.append(os.path.join(d, f))
+        self.assertEqual(bad, [])
+
     def test_senior_sweep_search_client_is_read_only(self):
         import siftmap_read
         m = siftmap_read.Map(None)

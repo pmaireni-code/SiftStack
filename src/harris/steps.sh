@@ -81,9 +81,20 @@ PY
     (cd src/harris && python3 -m crm.runlog --publish "$SIFT_RUN_ID") || echo "WARN: run log push failed (see above); the business steps are not affected"
     (cd src/harris && python3 -m crm.runlog --alert "$SIFT_RUN_ID" "../../work/alert/$SIFT_RUN_ID") || true
   fi
-  if [[ ${#FAILED_STEPS[@]} -gt 0 ]]; then
-    echo "RUN STATUS: ${#FAILED_STEPS[@]} step(s) failed or blocked: ${FAILED_STEPS[*]}"
-    return 1
-  fi
-  echo "RUN STATUS: all steps ok"
+  # Exit status of the whole run: 0 all steps ok; 3 one or more steps BLOCKED by the safety brakes on purpose
+  # (nothing written by them) and none failed; 1 at least one step FAILED (an error, or skipped for lack of input)
+  local verdict
+  verdict=$(cd src/harris && python3 - "$SIFT_RUN_ID" <<'PY'
+import sys
+from crm import runlog
+rows = [r for r in runlog.read(run_id=sys.argv[1]) if r.get("step") != "(whole run)"]
+print("error" if any(r.get("status") == "error" for r in rows) else "blocked" if any(r.get("status") == "blocked" for r in rows) else "ok")
+PY
+  ) || verdict="error"
+  if [[ ${#FAILED_STEPS[@]} -gt 0 && "$verdict" == "ok" ]]; then verdict="error"; fi
+  case "$verdict" in
+    ok)      echo "RUN STATUS: all steps ok"; return 0 ;;
+    blocked) echo "RUN STATUS: BLOCKED (exit 3): ${FAILED_STEPS[*]} stopped by the safety brakes on purpose, nothing written by them; the other steps ran"; return 3 ;;
+    *)       echo "RUN STATUS: FAILED (exit 1): ${#FAILED_STEPS[@]} step(s) failed or blocked: ${FAILED_STEPS[*]}"; return 1 ;;
+  esac
 }
