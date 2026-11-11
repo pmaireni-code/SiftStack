@@ -130,6 +130,26 @@ class HarrisPipeline(unittest.TestCase):
         self.assertEqual(len(L.FINGERPRINTS["harris"]), 64)
 
 
+class RunFromScriptFolder(unittest.TestCase):
+    def test_get_crm_works_when_run_from_src_harris_without_src_on_the_path(self):
+        """The scheduled run calls `cd src/harris && python3 <script>`: only src/harris is on the path."""
+        code = ("import crm\n"
+                "import importlib\n"
+                "real = importlib.import_module\n"
+                "def no_connector(name, *a, **k):\n"
+                "    if name.endswith('.datasift'): raise SystemExit('connector not loaded: ok')\n"
+                "    return real(name, *a, **k)\n"
+                "import builtins; orig = builtins.__import__\n"
+                "def imp(name, *a, **k):\n"
+                "    if name == 'crm.datasift': raise SystemExit(7)\n"
+                "    return orig(name, *a, **k)\n"
+                "builtins.__import__ = imp\n"
+                "crm.get_crm()\n")
+        p = subprocess.run([sys.executable, "-c", code], cwd=os.path.join(ROOT, "src", "harris"), capture_output=True, text=True)
+        self.assertNotIn("No module named 'account_lock'", p.stderr)
+        self.assertEqual(p.returncode, 7, p.stderr)
+
+
 class Standalone(unittest.TestCase):
     def test_datasift_api_upload_alone_cannot_write(self):
         code = ("import sys; sys.path.insert(0, %r)\n"
