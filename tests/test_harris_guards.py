@@ -312,12 +312,36 @@ run_footer
         p = subprocess.run(["bash", "-c", sh], env=env, capture_output=True, text=True)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "grade.done")), p.stdout + p.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "phones.done")))
-        self.assertEqual(p.returncode, 1, "the run reports the failed step")
+        self.assertEqual(p.returncode, 3, "only a blocked step: the run exits 3, not 1")
         self.assertIn("BLOCKED", p.stdout)
         self.assertIn("RUN LOG LINES:", p.stdout)
         rows = self.lines()
         self.assertEqual([(r["step"], r["status"]) for r in rows], [("bid updater", "blocked"), ("(whole run)", "error")])
         self.assertEqual(rows[0]["profile"], "scheduled")
+
+    def test_a_failed_step_makes_the_run_exit_1_even_with_a_block(self):
+        root = os.path.abspath(os.path.join(HARRIS, "..", ".."))
+        sh = f"""
+set -euo pipefail
+cd {root!r}
+RUN_NAME=test; source src/harris/steps.sh
+blocked() {{ python3 {self.script!r} blocked; }}
+crash()   {{ python3 {self.script!r} crash; }}
+step "bid updater" -- blocked
+step "deal grade" -- crash
+run_footer
+"""
+        env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
+        env.update(SIFT_RUN_LOG=self.log, SIFT_RUN_ID="t4")
+        p = subprocess.run(["bash", "-c", sh], env=env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("RUN STATUS: FAILED (exit 1)", p.stdout)
+
+    def test_blocked_process_exits_3(self):
+        env = {k: v for k, v in os.environ.items() if k not in ENV_KEYS}
+        env.update(SIFT_RUN_LOG=self.log, SIFT_RUN_ID="t5")
+        p = subprocess.run([sys.executable, self.script, "blocked"], env=env, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 3)
 
     def test_step_dying_without_a_line_gets_one(self):
         os.environ["SIFT_RUN_LOG"] = self.log
@@ -433,6 +457,8 @@ class ImmediateAlert(unittest.TestCase):
         self.assertTrue(subject.startswith("[BLOCKED] Harris automation daily-20261112T124400Z: bid updater"))
         self.assertIn("Starting Bid clear on 9 Oak St", text, "the private alert keeps the full reason")
         self.assertIn("The other steps ran: deal grade", text)
+        self.assertIn("BLOCKED means the safety brakes stopped that step on purpose", text)
+        self.assertIn("it is not a script failure", text)
 
     def test_c_no_alert_on_a_clean_run(self):
         self.assertIsNone(runlog.alert(RunLogsBranch.ROWS[1:]))
@@ -459,7 +485,8 @@ run_footer --commit
         env.update(SIFT_RUN_LOG=log, SIFT_RUN_ID="daily-test", SIFT_RUNLOG_GIT_DIR=clone)
         p = subprocess.run(["bash", "-c", sh], env=env, capture_output=True, text=True)
         out = p.stdout
-        self.assertEqual(p.returncode, 1, out + p.stderr)
+        self.assertEqual(p.returncode, 3, out + p.stderr)
+        self.assertIn("RUN STATUS: BLOCKED (exit 3)", out)
         self.assertIn("ALERT_SUBJECT: [BLOCKED] Harris automation daily-test: bid updater", out)
         alert_txt = os.path.join(root, "work", "alert", "daily-test.txt")
         self.assertTrue(os.path.exists(alert_txt))

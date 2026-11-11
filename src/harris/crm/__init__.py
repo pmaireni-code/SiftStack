@@ -13,4 +13,8 @@ def get_crm(name=None) -> CRM:
     module, cls = CONNECTORS[name]
     from . import guard, runlog
     runlog.start(guard.current())  # every process that opens the CRM leaves one line in work/run_log.jsonl
+    import account_lock  # src/account_lock.py: the Harris pipeline writes only to the Harris account
+    account_lock._on_refuse.append(lambda reason, code: guard.current().__dict__.update(
+        status="blocked", error=reason, error_code=code))
+    account_lock.declare("harris")
     return getattr(__import__(f"{__name__}.{module}", fromlist=[cls]), cls)()

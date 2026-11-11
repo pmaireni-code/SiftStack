@@ -256,11 +256,13 @@ def alert(rows):
     ok = [r.get("step") or r.get("task") for r in rows if r not in bad and r.get("step") != "(whole run)"]
     text = (f"The Harris automation run {run_id} had {len(bad)} step(s) blocked or failed:\n" + "\n".join(lines)
             + ("\n\nThe other steps ran: " + ", ".join(ok) if ok else "")
-            + "\n\nA blocked step wrote nothing. Details are in the run's output; the full day appears in the 7 pm report.")
+            + "\n\nBLOCKED means the safety brakes stopped that step on purpose and it wrote nothing; it is not a script "
+              "failure. ERROR means the step failed. Details are in the run's output; the full day appears in the 7 pm report.")
     html = ("<p><b>The Harris automation run " + escape(run_id) + f" had {len(bad)} step(s) blocked or failed:</b></p><ul>"
             + "".join(f'<li style="color:#b00020">{escape(l[2:])}</li>' for l in lines) + "</ul>"
             + ("<p>The other steps ran: " + escape(", ".join(ok)) + "</p>" if ok else "")
-            + "<p>A blocked step wrote nothing. Details are in the run's output; the full day appears in the 7 pm report.</p>")
+            + "<p><b>BLOCKED</b> means the safety brakes stopped that step on purpose and it wrote nothing; it is not a script "
+              "failure. <b>ERROR</b> means the step failed. Details are in the run's output; the full day appears in the 7 pm report.</p>")
     return subject, text, html
 
 

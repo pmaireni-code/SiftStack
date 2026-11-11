@@ -8,6 +8,14 @@ and how deep is each one.
 """
 from __future__ import annotations
 
+# ARCHIVED 2026-11-11 (archive/other_accounts/): written for other DataSift accounts (Ty's Franklin OH staging /
+# Knox list inventory) and depended on siftmap_pull, archived with the Knox modules. Refuses to run.
+import sys as _archived_sys
+if __name__ == "__main__":
+    print("REFUSED: archived script (archive/other_accounts/); it was written for another DataSift account and "
+          "does not run here. Nothing was called.")
+    _archived_sys.exit(2)
+
 import json
 import os
 

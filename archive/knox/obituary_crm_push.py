@@ -32,6 +32,14 @@ Usage:
 
 from __future__ import annotations
 
+# ARCHIVED 2026-11-11 (archive/knox/): written for the Knox DataSift account and refuses to run (operator's
+# decision; this repo writes only to the Harris account, see src/account_lock.py). Kept for reference only.
+import sys as _archived_sys
+if __name__ == "__main__":
+    print("REFUSED: archived Knox module (archive/knox/); it was written for another DataSift account and "
+          "does not run here. Nothing was called.")
+    _archived_sys.exit(2)
+
 import argparse
 import csv
 import json
