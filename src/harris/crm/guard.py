@@ -281,6 +281,10 @@ class Run:
     def on_call(self, method, path, headers):
         """Before a call. Returns a synthetic response to skip a write, or None to send it."""
         self.api_calls += 1
+        from datasift_api_upload import is_skiptrace_run
+        if is_skiptrace_run(method, path):  # forbidden outright: no profile, flag or authorization enables it
+            self._block(Blocked(f"{method} {path}: skip trace over the API is forbidden; use DataSift's screen",
+                                code="skiptrace_forbidden"))
         if not self.is_write(method, headers):
             return None
         if method.upper() == "DELETE" and not self.allow_destructive:

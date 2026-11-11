@@ -125,6 +125,11 @@ class Api:
         self.minted = time.time()
 
     def call(self, path, method="GET", body=None, _retry=True, headers=None):
+        # Skip trace over the API is FORBIDDEN (operator, 2026-11-11): the endpoint ignores scoping and
+        # traces the whole account (53,322 records from a one-record call, datasift_skiptrace.py). No flag
+        # re-enables it; skip trace is done only from DataSift's own screen on a filtered selection.
+        if is_skiptrace_run(method, path):
+            raise SkipTraceForbidden(method, path)
         # JWTs are short-lived; refresh transparently rather than dying mid-run.
         if time.time() - self.minted > 1800:
             self._mint()
@@ -142,6 +147,23 @@ class Api:
                 self._mint()
                 return self.call(path, method, body, _retry=False, headers=headers)
             raise ApiError(e.code, method, path, e.read().decode())
+
+
+SKIPTRACE_RUN = "/api/internal/property/skip-trace/"
+
+
+def is_skiptrace_run(method: str, path: str) -> bool:
+    """A call that would START a skip trace. Reading the stats (GET .../activity/skiptrace/stats/) is not one."""
+    p = (path or "").split("?")[0].rstrip("/") + "/"
+    return (method or "GET").upper() != "GET" and p.endswith("/property/skip-trace/")
+
+
+class SkipTraceForbidden(RuntimeError):
+    """Raised for any attempt to start a skip trace over the API. Never caught to retry or override."""
+
+    def __init__(self, method: str, path: str):
+        super().__init__(f"{method} {path}: skip trace over the API is forbidden (it ignores scoping and traces "
+                         "the whole account). Run skip trace from DataSift's screen on a filtered selection.")
 
 
 _ROUTE_DECIDED = {"route": ""}
