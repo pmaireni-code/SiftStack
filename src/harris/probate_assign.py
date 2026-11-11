@@ -83,6 +83,9 @@ def main(*flags):
     # The tag marks every lead past the mark, whoever it is assigned to
     past = [l for l in leads if start(l) and (today - start(l)).days >= days]
     to_tag = [l for l in past if TAG not in [t.strip() for t in (l.get("Tags") or "").split(",")]]
+    if commit:  # safety brakes (crm/guard.py)
+        crm.plan([{"id": l["id"], "address": l["Property Street Address"], "add_tags": [TAG]} for l in to_tag]
+                 + [{"id": l["id"], "address": l["Property Street Address"], "assign": user} for l in due])
     tagged = 0
     for l in to_tag:
         if not commit:

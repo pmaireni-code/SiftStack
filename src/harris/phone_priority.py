@@ -70,6 +70,7 @@ def main(*flags):
     ids = ids[: limit or None]
     leads = phones_n = changed = written = failed = 0
     counts = {t: 0 for t in TIERS + [DROP]}
+    todo = []  # every phone to rewrite, collected first so the safety brakes see the whole step
     for lid in ids:
         owner, phones = crm.read_phones(lid)
         if not owner or not phones:
@@ -84,12 +85,15 @@ def main(*flags):
             if sorted(p["tags"]) == new:
                 continue
             changed += 1
-            if commit:
-                if crm.set_phone_tags(lid, owner, p, new):
-                    written += 1
-                else:
-                    failed += 1
-                    print(f"  WARN phone ...{p['number'][-4:]} on {lid}: did not read back")
+            todo.append((lid, owner, p, new))
+    if commit:
+        crm.plan([{"id": lid, "phone_tags_before": list(p["tags"]), "phone_tags_after": new} for lid, _, p, new in todo])
+        for lid, owner, p, new in todo:
+            if crm.set_phone_tags(lid, owner, p, new):
+                written += 1
+            else:
+                failed += 1
+                print(f"  WARN phone ...{p['number'][-4:]} on {lid}: did not read back")
     print(f"PHONE PRIORITY: {leads} leads, {phones_n} phones | " + ", ".join(f"{k} {v}" for k, v in counts.items())
           + f" | {'written ' + str(written) if commit else 'would write ' + str(changed)} changed"
           + (f" | {failed} failed" if failed else ""))

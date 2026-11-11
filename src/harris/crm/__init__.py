@@ -11,4 +11,6 @@ def get_crm(name=None) -> CRM:
     if name not in CONNECTORS:
         raise SystemExit(f"unknown CRM {name!r}; known: {', '.join(CONNECTORS)} (see crm/TEMPLATE.py)")
     module, cls = CONNECTORS[name]
+    from . import guard, runlog
+    runlog.start(guard.current())  # every process that opens the CRM leaves one line in work/run_log.jsonl
     return getattr(__import__(f"{__name__}.{module}", fromlist=[cls]), cls)()

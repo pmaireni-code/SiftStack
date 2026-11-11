@@ -26,6 +26,25 @@ DAILY_TAGS = ("Bid Posted", "Postponed")
 class CRM:
     name = "base"
 
+    # ---- safety brakes (crm/guard.py), shared by every connector
+    def plan(self, changes: list, commit: bool = True):
+        """Declare the step's writes before making them: [{"id", "address", "set": {col: value},
+        "before": {col: value}, "add_tags", "assign", ...}]. Mode, caps and destructive checks run over the
+        whole plan first, so a blocked step writes nothing; a manual run over 10 leads becomes a dry run."""
+        from . import guard
+        return guard.current().plan(changes, commit)
+
+    def plan_rows(self, rows: list, commit: bool = True):
+        """plan() for an upload: one change per row, keyed by its address."""
+        return self.plan([self.row_change(r) for r in rows], commit)
+
+    @staticmethod
+    def row_change(row: dict) -> dict:
+        key = " ".join(str(row.get(k) or "").strip() for k in ("Property Street Address", "Property ZIP Code")).strip()
+        return {"address": key, "create": True,
+                "set": {k: v for k, v in row.items() if (v or "").strip() and k not in ("Notes", "Tags", "Note Key")},
+                "add_tags": [t.strip() for t in (row.get("Tags") or "").split(",") if t.strip()]}
+
     def upsert_lead(self, row: dict, commit: bool) -> dict:
         """Create the lead, or attach to the existing record at the same property address.
 

@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from crm import get_crm  # noqa: E402
+from crm import get_crm, runlog  # noqa: E402
 
 HOU = ZoneInfo("America/Chicago")
 # Notes that only say nobody was reached, including cut-off words and joins ("Wrong numb", "No response.",
@@ -36,6 +36,14 @@ DNC_WORDS = re.compile(r"\bDNC\b|do not call|don'?t call|stop calling|remove (me
                        r"taken out (from|of) (the )?list|remove(d)? from (the )?list", re.I)
 HOT = {"hot lead", "warm lead"}
 esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _houston_day(ts):
+    """ISO UTC timestamp -> its Houston calendar date (None when unreadable)."""
+    try:
+        return datetime.fromisoformat(ts).astimezone(HOU).date()
+    except (TypeError, ValueError):
+        return None
 
 
 def main(*flags):
@@ -154,7 +162,12 @@ def main(*flags):
              if first else "no outbound calls")
     talk = round(sum(c["dur"] for c in answered) / 60)
     name = user.title()
-    subject = f"Daily Report - {name} - {day:%B %-d, %Y}"
+    # The day's automation steps from the run log (crm/runlog.py), blocked and failed first; a blocked or
+    # failed step is named in the subject. --run-log points at a copy brought from the run's container.
+    run_rows = [r for r in runlog.read(flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
+                if r.get("profile") == "scheduled" and _houston_day(r.get("ts_start")) == day]
+    runs_html, runs_text, run_problems = runlog.digest(run_rows)
+    subject = runlog.subject_tag(run_problems) + f"Daily Report - {name} - {day:%B %-d, %Y}"
     summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
                f"and had {len(convo)} conversations with owners.")
     rows = [("Leads worked", len(worked)), ("Outbound calls", len(out_calls)),
@@ -170,11 +183,13 @@ def main(*flags):
             + "<h3>Conversations with owners</h3>"
             + (tbl(["Lead", "Note", "Status"], [(c["street"], c["note"], c["status"]) for c in convo]) if convo else "<p>None today.</p>")
             + "<h3>To do</h3>" + ("<ol>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>" if todo else "<p>Nothing pending from today's records.</p>")
+            + runs_html
             + f"<p><i>Source: DataSift activity logs (smrtPhone calls, notes, statuses, phone dispositions) for {day:%B %-d, %Y}, Houston time.</i></p>")
     strip = lambda s: re.sub(r"<[^>]+>", "", s)
     text = (f"Hi Maireni,\n\nSummary: {summary}\n\nResults: " + "; ".join(f"{k}: {v}" for k, v in rows)
             + "\n\nConversations:\n" + ("\n".join(f"- {c['street']}: {c['note']} ({c['status']})" for c in convo) or "None today.")
             + "\n\nTo do:\n" + ("\n".join(f"{i}. {strip(t)}" for i, t in enumerate(todo, 1)) or "Nothing pending.")
+            + "\n\n" + runs_text
             + f"\n\nSource: DataSift activity logs for {day:%B %-d, %Y}, Houston time.")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     open(out + ".html", "w").write(html)
