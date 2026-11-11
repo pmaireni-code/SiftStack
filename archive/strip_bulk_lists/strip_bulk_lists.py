@@ -1,4 +1,6 @@
-"""Remove the DataFlik bulk lists from our first-to-market records.
+"""ARCHIVED 2026-11-11: refuses to run (main() returns 2 before doing anything). Kept for its API notes.
+
+Remove the DataFlik bulk lists from our first-to-market records.
 
 Enrichment attaches its own bulk lists (Owner Occupied, High Equity, Senior
 Homeowners, Free & Clear ...) to whatever it touches. Those lists drive the BULK
@@ -34,7 +36,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
 
 from datasift_api_upload import Api  # noqa: E402
 
@@ -50,7 +52,17 @@ def lists_of(d: dict) -> list[str]:
     return [x for x in out if x]
 
 
+RETIRED = ("strip_bulk_lists is archived (operator, 2026-11-11) and refuses to run: it removed lists in bulk "
+           "and was written for another DataSift account. Nothing was called.")
+
+
 def main() -> int:
+    """Archived: refuses before reading arguments, building a client or touching the network."""
+    print("REFUSED: " + RETIRED)
+    return 2
+
+
+def _retired_main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--audit", default="output/enriched_audit.json")
     ap.add_argument("--commit", action="store_true")

@@ -1,4 +1,11 @@
-"""Skip trace via the DataSift internal API.
+"""DataSift skip trace counters (read only). STARTING a skip trace over the API is FORBIDDEN.
+
+Operator, 2026-11-11: the run endpoint ignores scoping (below), so it is refused at the source: every
+datasift_api_upload.Api call to it raises SkipTraceForbidden, and the Harris connector's safety brakes
+block it too, whatever the profile or authorization. --run is kept only to say so. Skip trace is done from
+DataSift's own screen (Send To > Skip Trace on a filtered selection). --stats stays free.
+
+History (why):
 
 THE SCOPING PARAMETER IS IGNORED. `POST /api/internal/property/skip-trace/`
 accepts a body but does not honour `properties`: a call carrying a single
@@ -19,7 +26,7 @@ run if value_spent is non-zero, because on a metered plan the same call would
 bill for every record in the account.
 
     python src/datasift_skiptrace.py --stats            # read only
-    python src/datasift_skiptrace.py --run              # account-wide, guarded
+    python src/datasift_skiptrace.py --run              # REFUSED (forbidden since 2026-11-11)
 
 WHY IT MATTERS: every FTM preset requires `phone: 1` and `skiptraced: 1`.
 Records that are correctly tagged and listed still enter no cadence until they
@@ -58,57 +65,26 @@ def show(s: dict) -> None:
 
 
 def run(api: Api, confirm_unlimited: bool = True) -> dict:
-    """Trigger a skip trace. This is ACCOUNT-WIDE, see the module docstring."""
-    before = stats(api)
-    spent = float(before.get("value_spent") or 0)
-    saved = float(before.get("saved_by_unlimited_skiptracing") or 0)
-
-    if confirm_unlimited and (spent > 0 or saved <= 0):
-        raise RuntimeError(
-            f"Refusing to run: this looks like a METERED skip trace plan "
-            f"(value_spent={spent}, saved_by_unlimited={saved}). The endpoint "
-            f"ignores scoping and would bill for every record in the account."
-        )
-
-    resp = api.call(RUN, "POST", {})
-    time.sleep(5)
-    after = stats(api)
-    return {
-        "requested": resp.get("number_of_records") if isinstance(resp, dict) else None,
-        "cost": resp.get("cost") if isinstance(resp, dict) else None,
-        "before": before.get("total_properties"),
-        "after": after.get("total_properties"),
-        "delta": (after.get("total_properties") or 0) - (before.get("total_properties") or 0),
-        "value_spent": after.get("value_spent"),
-    }
+    """Refused, always. Kept so an old caller fails loudly instead of tracing the whole account."""
+    from datasift_api_upload import SkipTraceForbidden
+    raise SkipTraceForbidden("POST", RUN)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stats", action="store_true", help="read the counters and exit")
     ap.add_argument("--run", action="store_true",
-                    help="trigger skip trace. ACCOUNT-WIDE; the endpoint ignores scoping")
-    ap.add_argument("--allow-metered", action="store_true",
-                    help="override the unlimited-plan guard. Think first.")
+                    help="REFUSED: skip trace over the API is forbidden (kept only to say so)")
     a = ap.parse_args()
 
+    if a.run:
+        print("REFUSED: skip trace over the API is forbidden (the endpoint ignores scoping and traces the whole "
+              "account). Use DataSift's screen: Send To > Skip Trace on a filtered selection. Nothing was called.")
+        return 2
     api = Api()
-    if a.stats or not a.run:
-        print("DataSift skip trace, current state:")
-        show(stats(api))
-        if not a.run:
-            print("\nNothing triggered. Use --run to skip trace (account-wide).")
-        return 0
-
-    print("Triggering skip trace. NOTE: the API ignores scoping, so this covers "
-          "the whole account.")
-    res = run(api, confirm_unlimited=not a.allow_metered)
-    print(json.dumps(res, indent=1))
-    if res["delta"] <= 0:
-        print("\nNo change in the counter. Either everything was already traced "
-              "or the run did not take.")
-        return 1
-    print(f"\ntraced {res['delta']:,} more properties, cost ${res['value_spent']:,.2f}")
+    print("DataSift skip trace, current state:")
+    show(stats(api))
+    print("\nRead only. Skip trace runs only from DataSift's screen.")
     return 0
 
 
