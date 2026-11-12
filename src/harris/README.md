@@ -269,3 +269,24 @@ the HCAD roll 384, sq ft outside the buy box 51. Property address and Estimated 
 (HCAD appends townhome building/unit codes like `100 MAIN ST 10/45`; DataSift stores it as
 `# 10`). Temperature: +2 vacant, +1 each for 80+, single owner, built 1975 or earlier, HCAD
 "Over-65" (not "or Disabled"), ZIP selling 20%+ faster than the county.
+
+## Trestle phone scores (trestle.py, trestle_score.py; 2026-11-12)
+
+Paid: Phone Validation $0.015 + Litigator Check $0.005 = $0.020 per number (Trestle self-service pricing,
+checked 2026-11-12). The API key lives in the cloud environment's network secrets; the proxy injects it, so the
+code sends a placeholder header and never holds the key.
+
+`trestle_score.py` scores the phones on the call pipeline (Priority 1 / Blitz Active), skipping numbers marked
+DNC / wrong / dead, numbers scored less than 180 days ago, numbers marked correct that were already scored, and
+leads also on Harris - Senior Equity. A simulation (and the cost) comes first; the paid queries run only after
+the brakes approve the plan, under `TRESTLE_MAX_QUERIES` (default 400 per run). `--limit N` caps numbers.
+
+| Result | Phone | Lead |
+|---|---|---|
+| score 81-100 / 61-80 / 41-60 / 40 or less | Dial First / Second / Third / Drop | |
+| litigator | Drop + tag Litigator | tag "Litigator - Do Not Contact" |
+| no number 61+ (once every live number is scored), none marked correct | | tag "Needs Re-Skip" |
+| every scored number | tag "Trestle Scored" | field "Trestle Phone Scores": `number=score@date` (`L` = litigator, `?` = invalid) |
+
+`phone_priority.py` (daily) reads that field: scored numbers take their tier from the score, a number marked
+correct stays Dial First, unscored numbers keep the old rule.

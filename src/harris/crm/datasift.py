@@ -36,7 +36,9 @@ FIELDS = {"Starting Bid": "Starting Bid", "Original Loan Amount": "Original Loan
                             "Price Band 60", "Investor Volume Band")},
           # One prospect score comparable across every list (Hot / Warm / Cold / Not Viable / Needs Data),
           # computed before any contact. It is NOT DataSift's own temperature, which is the caller's call
-          "Prospect Score": "Prospect Score", "Prospect Reasons": "Prospect Reasons"}
+          "Prospect Score": "Prospect Score", "Prospect Reasons": "Prospect Reasons",
+          # Trestle phone scores, one entry per number: "7135550123=85@2026-11-12; ..." (trestle.py)
+          "Trestle Phone Scores": "Trestle Phone Scores"}
 # Lead column -> native property field (names as the record detail returns them)
 NATIVE = {"Estimated Value": "estimate_value", "Year Built": "year", "Living SqFt": "sqft", "Parcel ID": "apn",
           "Auction Date": "auction_date"}  # DataSift's own auction_date, so native filters see the sale too
@@ -403,6 +405,15 @@ class DataSiftCRM(CRM):
                 nxt = r.get("next")
                 url = nxt.split("reisift.io", 1)[-1] if nxt else None
         return d, out
+
+    def lead_field(self, lead_id, label):
+        """The raw value of one custom field on a lead ("" when unset or when the field does not exist)."""
+        f = self.fields.get(label)
+        if not f:
+            return ""
+        cf = self.api.call(f"/api/internal/property/{lead_id}/custom-field/")
+        return next(((x.get("value") or "") for x in (cf.get("results") or [])
+                     if (x.get("custom_field") or {}).get("uuid") == f["uuid"]), "")
 
     # ---- temperature cleanup (temperature_cleanup.py ONLY)
     def reset_temperature(self, lead_id, current, address=""):
