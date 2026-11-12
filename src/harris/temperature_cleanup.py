@@ -9,7 +9,9 @@
 Until 2026-11-11 harris_grade (foreclosure) and the probate upload set DataSift's temperature (Hot 5, Warm 3)
 before any contact. A lead goes back to 0 only when EVERY condition holds, re-checked on the live record
 (operator, 2026-11-11):
-  1. it is on "Harris - Foreclosure" or "Harris - Probate" (Senior Equity is out until further notice);
+  1. it is on "Harris - Foreclosure" or "Harris - Probate", and NOT also on "Harris - Senior Equity" (Senior
+     is out of the cleanup until the operator says otherwise; read from the record's own lists, the Senior
+     list itself is never read);
   2. its temperature is 3 or 5 AND equals what the code would have written from its score:
      foreclosure Deal Grade / probate Lead Temperature Hot -> 5, Warm -> 3. Anything else is left alone;
   3. its history shows at least one temperature change, every one of them made by the pipeline's DataSift
@@ -28,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crm import get_crm  # noqa: E402
 
 LISTS = {"Harris - Foreclosure": "Deal Grade", "Harris - Probate": "Lead Temperature"}
+EXCLUDED_LIST = "Harris - Senior Equity"
 CODE_VALUE = {"Hot": 5, "Warm": 3}
 CONTACT_PREFIXES = ("owner.call.", "owner.sms", "property.sms", "property.message.added", "property.status.",
                     "owner.phone.status.updated", "task.", "property.siftline", "siftline.", "card.")
@@ -47,6 +50,8 @@ def author(e):
 def verdict(lead, events, me):
     """-> "" when the lead qualifies, else the reason it is kept."""
     h, score = lead["hotness"], lead["score"]
+    if lead.get("senior"):
+        return "also on Harris - Senior Equity (excluded)"
     if h not in (3, 5):
         return "temperature not 3 or 5"
     if CODE_VALUE.get(score) != h:
@@ -88,10 +93,12 @@ def read(crm):
         for r in crm.list_assignments(list_name, (score_f,)):
             d = crm.api.call(f"/api/internal/property/{r['id']}/")
             st = d.get("status")
+            on = {(x.get("title") or x.get("name")) if isinstance(x, dict) else x for x in d.get("lists") or []}
             out.append({"id": r["id"], "address": r["Property Street Address"], "list": list_name,
                         "score": options.get(r[score_f], r[score_f] or ""), "hotness": int(d.get("hotness") or 0),
                         "status": (st.get("title") if isinstance(st, dict) else st) or "",
-                        "calls": d.get("predictivecall_attempts") or 0, "sms": d.get("sms_attempts") or 0})
+                        "calls": d.get("predictivecall_attempts") or 0, "sms": d.get("sms_attempts") or 0,
+                        "senior": EXCLUDED_LIST in on})
     return out
 
 
@@ -109,6 +116,9 @@ def main(*flags):
             keep[(l["list"], why)] += 1
         else:
             todo.append(l)
+    also = collections.Counter(l["list"] for l in leads if l.get("senior"))
+    print(f"also on {EXCLUDED_LIST} (from each record's own lists): "
+          + ", ".join(f"{k} {also.get(k, 0)}" for k in LISTS))
     print(f"{len(leads)} leads read; {sum(1 for l in leads if l['hotness'])} with a temperature; "
           f"{len(todo)} qualify for reset to 0")
     for (lst, why), n in sorted(keep.items()):

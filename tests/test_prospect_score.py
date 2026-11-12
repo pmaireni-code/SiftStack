@@ -198,8 +198,9 @@ class ProspectFields(unittest.TestCase):
 
 class Cleanup(unittest.TestCase):
     def setUp(self):
+        import importlib
         import temperature_cleanup as T
-        self.T = T
+        self.T = importlib.reload(T)  # other tests replace its functions with fakes
 
     def L(self, **kw):
         base = {"id": lead(1), "address": "1 Elm St", "list": "Harris - Foreclosure", "score": "Hot", "hotness": 5,
@@ -233,6 +234,29 @@ class Cleanup(unittest.TestCase):
         self.assertIn("no record", v(self.L(), []))
         self.assertIn("someone else", v(self.L(), [self.HOT_EVENT, {"event_type": "property.hotness.increased",
                                                                     "author": "caller@example.com"}]))
+
+    def test_a_lead_also_on_senior_equity_is_never_cleaned(self):
+        self.assertIn("Senior Equity", self.T.verdict(self.L(senior=True), [self.HOT_EVENT], PIPE))
+
+    def test_read_takes_senior_from_the_records_own_lists(self):
+        class Api:
+            def call(s, path, *a, **k):
+                i = int(path.rstrip("/").split("/")[-1][-1])
+                return {"hotness": 5, "lists": [{"title": "Harris - Foreclosure"}] + ([{"title": "Harris - Senior Equity"}] if i == 2 else [])}
+
+        class C:
+            api = Api()
+            fields = {}
+            seen = []
+
+            def list_assignments(self, name, fields):
+                self.seen.append(name)
+                return [{"id": lead(i), "Property Street Address": f"{i} Elm", fields[0]: "Hot"} for i in (1, 2)] \
+                    if name == "Harris - Foreclosure" else []
+        c = C()
+        rows = self.T.read(c)
+        self.assertEqual([r["senior"] for r in rows], [False, True])
+        self.assertNotIn("Harris - Senior Equity", c.seen, "the Senior list itself is never read")
 
     def test_history_merges_two_reads(self):
         reads = iter([[{"uuid": "a", "event_type": "x"}], [{"uuid": "a", "event_type": "x"},
