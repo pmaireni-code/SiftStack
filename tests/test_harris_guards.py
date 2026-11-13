@@ -17,7 +17,7 @@ from crm.datasift import DataSiftCRM, PatientApi  # noqa: E402
 
 FUTURE = (date.today() + timedelta(days=20)).strftime("%m/%d/%Y")
 PAST = (date.today() - timedelta(days=3)).strftime("%m/%d/%Y")
-ENV_KEYS = ("SIFT_PROFILE", "SIFT_MODE", "SIFT_ALLOW_DESTRUCTIVE", "SIFT_MAX_RECORDS", "SIFT_SCHEDULED_CEILING",
+ENV_KEYS = ("TRESTLE_API_KEY", "SIFT_PROFILE", "SIFT_MODE", "SIFT_ALLOW_DESTRUCTIVE", "SIFT_MAX_RECORDS", "SIFT_SCHEDULED_CEILING",
             "SIFT_BATCH_PAUSE", "SIFT_TASK", "SIFT_RUN_ID", "SIFT_STEP", "SIFT_RUN_LOG")
 
 

@@ -52,7 +52,7 @@ class Rules(unittest.TestCase):
         self.assertEqual((r["score"], r["litigator"]), (77, False))
         self.assertIsNone(T.parse_response({"is_valid": False, "activity_score": None})["score"])
 
-    def test_query_sends_placeholder_key_and_litigator_addon(self):
+    def test_query_sends_the_key_from_the_variable_and_litigator_addon(self):
         seen = []
 
         class R:
@@ -61,12 +61,23 @@ class Rules(unittest.TestCase):
             def __enter__(s): return s
             def __exit__(s, *a): return False
         opener = lambda req, timeout=0: seen.append(req) or R(json.dumps({"activity_score": 90}).encode())
-        r = T.query("(713) 555-0101", opener=opener)
+        os.environ["TRESTLE_API_KEY"] = " test-key-123 "
+        try:
+            r = T.query("(713) 555-0101", opener=opener)
+        finally:
+            os.environ.pop("TRESTLE_API_KEY")
         self.assertEqual(r["score"], 90)
         req = seen[0]
         self.assertIn("phone=7135550101", req.full_url)
         self.assertIn("add_ons=litigator_checks", req.full_url)
-        self.assertEqual(req.get_header("X-api-key"), "proxy-injected", "the real key is injected by the proxy")
+        self.assertEqual(req.get_header("X-api-key"), "test-key-123", "the key from TRESTLE_API_KEY, trimmed, no prefix")
+
+    def test_no_key_stops_before_any_request(self):
+        os.environ.pop("TRESTLE_API_KEY", None)
+        sent = []
+        with self.assertRaises(T.NoKey):
+            T.query("7135550101", opener=lambda req, timeout=0: sent.append(req))
+        self.assertEqual(sent, [])
 
 
 class PhonePriorityWithScores(unittest.TestCase):
@@ -169,6 +180,7 @@ class FakeCRM:
 class ScoreRun(unittest.TestCase):
     def run_score(self, crm, *flags, answers=None, **env):
         import trestle_score as S
+        env.setdefault("TRESTLE_API_KEY", "test-key")
         r = run_as("trestle_score", **env)
         r.out = lambda *_: None
         S.get_crm = lambda: crm
@@ -217,6 +229,20 @@ class ScoreRun(unittest.TestCase):
         self.run_score(crm, "--commit", SIFT_MODE="live")
         _, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live")
         self.assertEqual(queried, [], "numbers scored today are not queried again for 180 days")
+
+    def test_refused_queries_write_nothing(self):
+        crm = FakeCRM(n_leads=2)
+        code, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live",
+                                               answers=lambda n: {"score": None, "litigator": False, "error": "HTTP 403"})
+        self.assertEqual(len(queried), 6)
+        self.assertEqual(crm.writes, [], "no number got a score: no lead is written")
+        self.assertIn("0 answered ($0.00", out)
+
+    def test_no_key_in_session_queries_and_writes_nothing(self):
+        crm = FakeCRM(n_leads=2)
+        code, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live", TRESTLE_API_KEY="")
+        self.assertEqual((queried, crm.writes), ([], []))
+        self.assertIn("TRESTLE_API_KEY is not set", str(code))
 
     def test_senior_leads_are_skipped(self):
         crm = FakeCRM(n_leads=3, senior=(1,))

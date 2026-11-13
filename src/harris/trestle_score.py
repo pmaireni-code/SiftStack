@@ -104,9 +104,10 @@ def main(*flags):
     if not commit:
         print("Nothing queried, nothing written. --commit runs it through the safety brakes.")
         return 0
+    T.api_key()  # no key in this session: stop before anything is queried or written
     run = guard.current()
     run.trestle_queries = 0
-    errors = 0
+    errors, answered, scored_leads = 0, 0, set()
     for l, p in numbers:
         r = T.query(p["number"])
         run.trestle_queries += 1
@@ -115,8 +116,12 @@ def main(*flags):
             print(f"  ERROR ...{T.digits(p['number'])[-4:]} on {l['address']}: {r['error']}")
             continue
         l["scores"][T.digits(p["number"])] = {"score": r["score"], "litigator": r["litigator"], "date": today}
+        answered += 1
+        scored_leads.add(id(l))
     counts, lit, reskip, bad = {}, 0, 0, 0
     for l in touched.values():
+        if id(l) not in scored_leads:  # no number got a score: nothing to write on this lead
+            continue
         phone_tags, add, text = lead_outcome(l)
         problems = crm.update_lead(l["id"], {T.FIELD: text}, add)
         for p in l["phones"]:
@@ -134,8 +139,8 @@ def main(*flags):
             if s and s["date"] == today:
                 t = "Litigator" if s["litigator"] else (T.tier_for(s["score"]) or "Invalid")
                 counts[t] = counts.get(t, 0) + 1
-    print(f"TRESTLE: {run.trestle_queries} queries (${run.trestle_queries * (T.COST_PHONE + T.COST_LITIGATOR):.2f}), "
-          f"{errors} errors | scored: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+    print(f"TRESTLE: {run.trestle_queries} queries, {answered} answered (${answered * (T.COST_PHONE + T.COST_LITIGATOR):.2f}; "
+          f"refused queries are not billed), {errors} errors | scored: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
           + f" | leads: {lit} litigator, {reskip} Needs Re-Skip | {bad} read-back problems")
     return 1 if bad or errors else 0
 

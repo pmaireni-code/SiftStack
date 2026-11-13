@@ -2,8 +2,11 @@
 per-lead record of what was scored (custom field "Trestle Phone Scores").
 
 Pricing (Trestle self-service, checked 2026-11-12): Phone Validation $0.015 per query, Litigator Check
-add-on +$0.005, so $0.020 per number with both. The API key is NOT in this code or in any variable: the
-cloud environment's proxy injects it into requests to api.trestleiq.com, so the header carries a placeholder.
+add-on +$0.005, so $0.020 per number with both. The API key comes from the environment variable
+TRESTLE_API_KEY (set in the cloud environment's settings; never printed, logged or written anywhere) and goes
+in the x-api-key header exactly as Trestle documents it. The environment's network-secret form only offers
+"Bearer token" or username/password, and Trestle refused both (403) while the same key worked with a plain
+x-api-key header (2026-11-12), so the key is read from the variable instead.
 
 Operator's rules (2026-11-12):
   score 81-100 -> Dial First, 61-80 -> Dial Second, 41-60 -> Dial Third, 40 or less -> Drop;
@@ -12,7 +15,7 @@ Operator's rules (2026-11-12):
   every scored number is tagged "Trestle Scored", and its score and date are kept on the lead;
   a number not marked correct may be queried again after 180 days, a correct one never.
 """
-import json, re, time, urllib.error, urllib.parse, urllib.request
+import json, os, re, time, urllib.error, urllib.parse, urllib.request
 from datetime import date, timedelta
 
 ENDPOINT = "https://api.trestleiq.com/3.0/phone_intel"
@@ -66,11 +69,24 @@ def due(number_scores, correct, today=None):
 
 
 # ---- the API
+class NoKey(SystemExit):
+    def __init__(self):
+        super().__init__("TRESTLE_API_KEY is not set in this session (it is added in the cloud environment's "
+                         "settings and reaches NEW sessions only). Nothing queried.")
+
+
+def api_key():
+    key = (os.environ.get("TRESTLE_API_KEY") or "").strip()
+    if not key:
+        raise NoKey()
+    return key
+
+
 def query(number, opener=None, retries=3):
     """One Phone Validation query with the Litigator Check add-on. -> {"score", "litigator", "line_type",
-    "is_valid", "error"}. The key is injected by the environment's proxy (header placeholder)."""
+    "is_valid", "error"}. The key comes from TRESTLE_API_KEY and is never printed."""
     url = ENDPOINT + "?" + urllib.parse.urlencode({"phone": digits(number), "add_ons": "litigator_checks"})
-    req = urllib.request.Request(url, headers={"x-api-key": "proxy-injected", "Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"x-api-key": api_key(), "Accept": "application/json"})
     opener = opener or urllib.request.urlopen
     for attempt in range(retries):
         try:
