@@ -23,8 +23,9 @@ before any CRM data exists. Points, each stated in Temperature Notes:
   +1  death 12+ months before the filing: the house has sat, carrying taxes and insurance
   +1  built before 1980: needs work, which is what an investor buys and a retail buyer avoids
 Hot = 4+ points AND inside DataSift's Market Finder buy box (value and sq ft; --market). Warm = 2-3,
-or 4+ outside the box. Cold = 0-1. The CRM's own temperature marker is set from it on first upload
-(Hot 5, Warm 3), like the foreclosure Deal Grade.
+or 4+ outside the box. Cold = 0-1. Also written to Prospect Score / Prospect Reasons, the prospect score
+shared with foreclosure and senior. DataSift's own temperature is never set: it is the caller's, after a
+conversation (operator, 2026-11-11).
 """
 import csv, json, re, sys
 from collections import defaultdict
@@ -39,7 +40,6 @@ ENTITY = re.compile(r"\b(LLC|INC|CORP|COMPANY|TRUST|BANK|N\.?A\.?|LP|LTD|ASSOCIA
 SUFFIX = {"JR", "SR", "II", "III", "IV"}
 PARTICLES = {"DE", "DEL", "LA", "VAN", "VON", "DA", "DI", "DOS", "ST", "LE", "MAC"}
 NO_WILL = re.compile(r"HEIRSHIP|INDEPENDENT ADMINISTRATION$|DEPENDENT ADMINISTRATION|ADMINISTRATION WITH AN HEIRSHIP")
-TEMPERATURE_CRM = {"Hot": 5, "Warm": 3}
 
 
 def split_person(full):
@@ -171,7 +171,8 @@ def main(match_path, out_path, *flags):
             "Executor": r["applicant"], "Executor Attorney": (attorney + (f", {r['attorney_phone']}" if r.get("attorney_phone") else "")).strip(", "),
             "Probate Open Date": r["file_date"], "Date of Death": r["dod"], "Probate Case Number": r["case"],
             "Probate Type": r["subtype"] or r["type"], "Lead Temperature": temp, "Temperature Notes": temp_notes[:500],
-            "Property Temperature": TEMPERATURE_CRM.get(temp, ""), "Match Confidence": r["confidence"]})
+            # the prospect score, comparable across lists; DataSift's own temperature is the caller's (never set here)
+            "Prospect Score": temp, "Prospect Reasons": temp_notes[:500], "Match Confidence": r["confidence"]})
     cols = list(dict.fromkeys(k for o in out for k in o))
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)

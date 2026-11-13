@@ -13,7 +13,7 @@ import csv, json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crm import get_crm  # noqa: E402
-from probate_upload import ensure_schema, upload  # noqa: E402
+from probate_upload import PROSPECT_GROUP, PROSPECT_OPTIONS, ensure_schema, upload  # noqa: E402
 
 LIST = "Harris - Senior Equity"
 GROUPS = {
@@ -31,7 +31,7 @@ PRESETS = [("Harris - Senior Equity (4 criterios)", None), ("Harris - Senior Equ
 
 
 def schema(crm, commit):
-    return ensure_schema(crm, commit, LIST, GROUPS, OPTIONS)
+    return ensure_schema(crm, commit, LIST, {**GROUPS, **PROSPECT_GROUP}, {**OPTIONS, **PROSPECT_OPTIONS})
 
 
 def presets(crm, commit):

@@ -20,6 +20,10 @@ FIELDS = [("Decedent Name", "text"), ("Executor", "text"), ("Executor Attorney",
           ("Probate Open Date", "date"), ("Date of Death", "date"), ("Probate Case Number", "text"),
           ("Probate Type", "text"), ("Lead Temperature", "select"), ("Temperature Notes", "text")]
 OPTIONS = {"Lead Temperature": ["Hot", "Warm", "Cold"]}
+# The prospect score shared by every Harris list (foreclosure, probate, senior): one comparable field, never
+# DataSift's own temperature (operator, 2026-11-11)
+PROSPECT_GROUP = {"Prospect": [("Prospect Score", "select"), ("Prospect Reasons", "text")]}
+PROSPECT_OPTIONS = {"Prospect Score": ["Hot", "Warm", "Cold", "Not Viable", "Needs Data"]}
 
 
 def ensure_schema(crm, commit, list_name, groups, options):
@@ -65,7 +69,7 @@ def ensure_schema(crm, commit, list_name, groups, options):
 
 
 def schema(crm, commit):
-    return ensure_schema(crm, commit, LIST, {GROUP: FIELDS}, OPTIONS)
+    return ensure_schema(crm, commit, LIST, {GROUP: FIELDS, **PROSPECT_GROUP}, {**OPTIONS, **PROSPECT_OPTIONS})
 
 
 def upload(rows, crm, commit, list_name, label, schema_fn):
