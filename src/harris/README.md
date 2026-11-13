@@ -273,7 +273,7 @@ the HCAD roll 384, sq ft outside the buy box 51. Property address and Estimated 
 ## Trestle phone scores (trestle.py, trestle_score.py; 2026-11-12)
 
 Paid: Phone Validation $0.015 + Litigator Check $0.005 = $0.020 per number (Trestle self-service pricing,
-checked 2026-11-12). The API key is the environment variable `TRESTLE_API_KEY` (cloud environment settings),
+checked 2026-11-12). The API key is the environment variable `TRESTLE_APIKEY` (cloud environment settings),
 sent as `x-api-key` exactly as Trestle documents; it is never printed or written. The network-secret form only
 offers "Bearer token" or username/password and Trestle refused both, while the same key worked with a plain
 `x-api-key` header. A run without the variable stops before querying anything.

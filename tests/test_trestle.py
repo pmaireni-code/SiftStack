@@ -61,18 +61,19 @@ class Rules(unittest.TestCase):
             def __enter__(s): return s
             def __exit__(s, *a): return False
         opener = lambda req, timeout=0: seen.append(req) or R(json.dumps({"activity_score": 90}).encode())
-        os.environ["TRESTLE_API_KEY"] = " test-key-123 "
+        os.environ["TRESTLE_APIKEY"] = " test-key-123 "
         try:
             r = T.query("(713) 555-0101", opener=opener)
         finally:
-            os.environ.pop("TRESTLE_API_KEY")
+            os.environ.pop("TRESTLE_APIKEY")
         self.assertEqual(r["score"], 90)
         req = seen[0]
         self.assertIn("phone=7135550101", req.full_url)
         self.assertIn("add_ons=litigator_checks", req.full_url)
-        self.assertEqual(req.get_header("X-api-key"), "test-key-123", "the key from TRESTLE_API_KEY, trimmed, no prefix")
+        self.assertEqual(req.get_header("X-api-key"), "test-key-123", "the key from TRESTLE_APIKEY, trimmed, no prefix")
 
     def test_no_key_stops_before_any_request(self):
+        os.environ.pop("TRESTLE_APIKEY", None)
         os.environ.pop("TRESTLE_API_KEY", None)
         sent = []
         with self.assertRaises(T.NoKey):
@@ -180,7 +181,7 @@ class FakeCRM:
 class ScoreRun(unittest.TestCase):
     def run_score(self, crm, *flags, answers=None, **env):
         import trestle_score as S
-        env.setdefault("TRESTLE_API_KEY", "test-key")
+        env.setdefault("TRESTLE_APIKEY", "test-key")
         r = run_as("trestle_score", **env)
         r.out = lambda *_: None
         S.get_crm = lambda: crm
@@ -240,9 +241,9 @@ class ScoreRun(unittest.TestCase):
 
     def test_no_key_in_session_queries_and_writes_nothing(self):
         crm = FakeCRM(n_leads=2)
-        code, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live", TRESTLE_API_KEY="")
+        code, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live", TRESTLE_APIKEY="")
         self.assertEqual((queried, crm.writes), ([], []))
-        self.assertIn("TRESTLE_API_KEY is not set", str(code))
+        self.assertIn("TRESTLE_APIKEY is not set", str(code))
 
     def test_senior_leads_are_skipped(self):
         crm = FakeCRM(n_leads=3, senior=(1,))

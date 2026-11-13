@@ -3,7 +3,7 @@ per-lead record of what was scored (custom field "Trestle Phone Scores").
 
 Pricing (Trestle self-service, checked 2026-11-12): Phone Validation $0.015 per query, Litigator Check
 add-on +$0.005, so $0.020 per number with both. The API key comes from the environment variable
-TRESTLE_API_KEY (set in the cloud environment's settings; never printed, logged or written anywhere) and goes
+TRESTLE_APIKEY (set in the cloud environment's settings; never printed, logged or written anywhere) and goes
 in the x-api-key header exactly as Trestle documents it. The environment's network-secret form only offers
 "Bearer token" or username/password, and Trestle refused both (403) while the same key worked with a plain
 x-api-key header (2026-11-12), so the key is read from the variable instead.
@@ -71,12 +71,13 @@ def due(number_scores, correct, today=None):
 # ---- the API
 class NoKey(SystemExit):
     def __init__(self):
-        super().__init__("TRESTLE_API_KEY is not set in this session (it is added in the cloud environment's "
+        super().__init__("TRESTLE_APIKEY is not set in this session (it is added in the cloud environment's "
                          "settings and reaches NEW sessions only). Nothing queried.")
 
 
 def api_key():
-    key = (os.environ.get("TRESTLE_API_KEY") or "").strip()
+    # TRESTLE_APIKEY since 2026-11-13 (shorter name, one line in the environment settings); the old name still works
+    key = (os.environ.get("TRESTLE_APIKEY") or os.environ.get("TRESTLE_API_KEY") or "").strip()
     if not key:
         raise NoKey()
     return key
@@ -84,7 +85,7 @@ def api_key():
 
 def query(number, opener=None, retries=3):
     """One Phone Validation query with the Litigator Check add-on. -> {"score", "litigator", "line_type",
-    "is_valid", "error"}. The key comes from TRESTLE_API_KEY and is never printed."""
+    "is_valid", "error"}. The key comes from TRESTLE_APIKEY and is never printed."""
     url = ENDPOINT + "?" + urllib.parse.urlencode({"phone": digits(number), "add_ons": "litigator_checks"})
     req = urllib.request.Request(url, headers={"x-api-key": api_key(), "Accept": "application/json"})
     opener = opener or urllib.request.urlopen
