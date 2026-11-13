@@ -302,16 +302,47 @@ class Cleanup(unittest.TestCase):
         crm = crm_with_prospect()
         fake(crm)
 
-        class ZeroAfterReset(MockApi):
+        class ZeroAfterReset(MockApi):  # the live record holds its temperature until the reset, then reads 0
             def _send(s, path, method, body, _retry, headers):
                 s.calls.append((method, path, headers))
-                return {"hotness": 0} if method == "GET" else {}
+                if method == "GET":
+                    done = any(m == "POST" and p == path.rstrip("/") + "/hotness/" for m, p, _ in s.calls)
+                    return {"hotness": 0 if done else self.L()["hotness"]}
+                return {}
         crm.api = ZeroAfterReset()
         with redirect_stdout(io.StringIO()):
             self.assertEqual(self.T.main("--commit"), 0)
         w = crm.api.writes()
         self.assertEqual(len(w), 60)
         self.assertTrue(all(p.endswith("/hotness/") for _, p in w))
+
+    def test_lead_touched_after_the_scan_is_skipped(self):
+        """Re-checked at the moment of writing: a lead that got a status after the scan keeps its temperature."""
+        run_as("temperature_cleanup", SIFT_MODE="live", SIFT_ALLOW_DESTRUCTIVE="1")
+        crm = crm_with_prospect()
+        self.T.read = lambda c: [self.L(id=lead(i), address=f"{i} Elm St") for i in range(2)]
+        crm.lead_activity = lambda lid: ({}, [self.HOT_EVENT])
+        self.T.pipeline_user = lambda api: PIPE
+        self.T.get_crm = lambda: crm
+        first = lead(0)
+
+        class Touched(MockApi):
+            def _send(s, path, method, body, _retry, headers):
+                s.calls.append((method, path, headers))
+                if method == "GET":
+                    if first in path:
+                        return {"hotness": 5, "status": {"title": "Warm Lead"}}
+                    done = any(m == "POST" and p == path.rstrip("/") + "/hotness/" for m, p, _ in s.calls)
+                    return {"hotness": 0 if done else 5}
+                return {}
+        crm.api = Touched()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(self.T.main("--commit"), 0)
+        w = crm.api.writes()
+        self.assertEqual(len(w), 1)
+        self.assertNotIn(first, w[0][1])
+        self.assertIn("SKIP 0 Elm St", buf.getvalue())
 
     def test_live_stops_after_a_first_lead_that_does_not_read_back(self):
         run_as("temperature_cleanup", SIFT_MODE="live", SIFT_ALLOW_DESTRUCTIVE="1")
