@@ -147,7 +147,8 @@ def subject_tag(problems, log_received=True):
 BRANCH = "run-logs"
 PUBLIC_FIELDS = ("ts_start", "ts_end", "run_id", "step", "task", "profile", "mode", "status", "error_code",
                  "planned", "leads_read", "leads_written", "api_calls", "rejected_by_verification",
-                 "destructive_leads", "batched", "batches", "skip_trace_credits", "trestle_queries", "ai_usage")
+                 "destructive_leads", "batched", "batches", "skip_trace_credits", "trestle_queries", "ai_usage",
+                 "window_end", "attempt_forgot", "attempt_inconsistent", "attempt_checked", "attempt_unchecked")
 
 
 def houston_day(ts):

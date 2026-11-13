@@ -23,7 +23,8 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from crm import get_crm, runlog  # noqa: E402
+from crm import get_crm, guard, runlog  # noqa: E402
+import attempt_report  # noqa: E402
 
 HOU = ZoneInfo("America/Chicago")
 # Notes that only say nobody was reached, including cut-off words and joins ("Wrong numb", "No response.",
@@ -58,6 +59,40 @@ def automation_section(day, path=None):
         return html, text, problems, False
     html, text, problems = runlog.digest(rows)
     return html, text, problems, True
+
+
+def attempt_section(crm, flags):
+    """"Leads called without attempt increment" (attempt_report.py). Never stops the email: any failure becomes a
+    line in the section. Its counts (no addresses) and its window end go to the public run log, so the next report
+    starts where this one ended and the 7-day total can be summed."""
+    now = datetime.now(timezone.utc)
+    try:
+        past = []
+        for i in range(0, 8):  # today and the 7 days before: earlier reports' cuts and counts
+            day_rows = runlog.fetch_day((now.astimezone(HOU) - timedelta(days=i)).date()) or []
+            past += [r for r in day_rows if r.get("task") == "daily_caller_report" and r.get("window_end")]
+        ends = sorted(r["window_end"] for r in past)
+        start = datetime.fromisoformat(ends[-1]) if ends else now - timedelta(hours=24)
+        if not now - timedelta(days=4) <= start < now:
+            start = now - timedelta(hours=24)
+        by_day = {}
+        for r in past:
+            by_day[runlog.houston_day(r["window_end"])] = r.get("attempt_forgot") or 0
+        history = [(d, n) for d, n in sorted(by_day.items()) if d and d < now.astimezone(HOU).date()]
+        budget = float(os.environ.get("ATTEMPT_REPORT_BUDGET_S") or attempt_report.BUDGET_S)
+        res = attempt_report.scan(crm, start, now, budget_s=budget)
+        html, text, counts = attempt_report.section(res, start, now, history)
+    except Exception as e:  # noqa: BLE001 (the 7 pm email must go out whatever happens here)
+        msg = f"Could not build this section today: {str(e)[:160]}."
+        return ("<h3>Leads called without attempt increment</h3>"
+                f'<p style="color:#b00020;font-weight:bold">{esc(msg)}</p>', "Leads called without attempt increment: " + msg)
+    run = guard.current()
+    run.extra = dict(counts, window_end=now.isoformat(timespec="seconds"))
+    if "--no-publish" not in flags:
+        rec = {"ts_start": now.isoformat(timespec="seconds"), "ts_end": now.isoformat(timespec="seconds"), **run.record()}
+        ok, msg = runlog.publish([rec])
+        print(("" if ok else "WARN: ") + msg)
+    return html, text
 
 
 def main(*flags):
@@ -180,6 +215,7 @@ def main(*flags):
     # (crm/runlog.py); --run-log FILE reads a local file instead. Blocked and failed steps come first and are
     # named in the subject; no log at all for the day is said in the subject too, never shown as a quiet day.
     runs_html, runs_text, run_problems, got_log = automation_section(day, flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
+    att_html, att_text = attempt_section(crm, flags)
     subject = runlog.subject_tag(run_problems, got_log) + f"Daily Report - {name} - {day:%B %-d, %Y}"
     summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
                f"and had {len(convo)} conversations with owners.")
@@ -196,13 +232,13 @@ def main(*flags):
             + "<h3>Conversations with owners</h3>"
             + (tbl(["Lead", "Note", "Status"], [(c["street"], c["note"], c["status"]) for c in convo]) if convo else "<p>None today.</p>")
             + "<h3>To do</h3>" + ("<ol>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>" if todo else "<p>Nothing pending from today's records.</p>")
-            + runs_html
+            + runs_html + att_html
             + f"<p><i>Source: DataSift activity logs (smrtPhone calls, notes, statuses, phone dispositions) for {day:%B %-d, %Y}, Houston time.</i></p>")
     strip = lambda s: re.sub(r"<[^>]+>", "", s)
     text = (f"Hi Maireni,\n\nSummary: {summary}\n\nResults: " + "; ".join(f"{k}: {v}" for k, v in rows)
             + "\n\nConversations:\n" + ("\n".join(f"- {c['street']}: {c['note']} ({c['status']})" for c in convo) or "None today.")
             + "\n\nTo do:\n" + ("\n".join(f"{i}. {strip(t)}" for i, t in enumerate(todo, 1)) or "Nothing pending.")
-            + "\n\n" + runs_text
+            + "\n\n" + runs_text + "\n\n" + att_text
             + f"\n\nSource: DataSift activity logs for {day:%B %-d, %Y}, Houston time.")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     open(out + ".html", "w").write(html)

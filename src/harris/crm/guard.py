@@ -387,7 +387,8 @@ class Run:
                 "leads_read": len(self.read_ids), "leads_written": len(self.written), "api_calls": self.api_calls,
                 "rejected_by_verification": len(self.rejected), "destructive_leads": len(self.destructive),
                 "batched": self.batched, "batches": self.batches + (1 if self.batched else 0),
-                "skip_trace_credits": None, "trestle_queries": getattr(self, "trestle_queries", None), "ai_usage": None}
+                "skip_trace_credits": None, "trestle_queries": getattr(self, "trestle_queries", None), "ai_usage": None,
+                **getattr(self, "extra", {})}
 
 
 _RUN = None
