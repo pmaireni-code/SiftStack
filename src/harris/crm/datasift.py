@@ -415,22 +415,6 @@ class DataSiftCRM(CRM):
         return next(((x.get("value") or "") for x in (cf.get("results") or [])
                      if (x.get("custom_field") or {}).get("uuid") == f["uuid"]), "")
 
-    # ---- temperature cleanup (temperature_cleanup.py ONLY)
-    def reset_temperature(self, lead_id, current, address=""):
-        """Put DataSift's own temperature back to 0 (cold) on a lead whose temperature the pipeline set before
-        any contact. The ONLY temperature write left in the code: a field clear through the safety brakes
-        (dry run, authorization above 10 leads), allowed only to the temperature_cleanup task. Read back."""
-        run = guard.current()
-        if run.before_write(lead_id, {"set": {"Property Temperature": ""}, "before": {"Property Temperature": str(current)}},
-                            address):
-            return True
-        with run.temperature_reset():
-            self.api.call(f"/api/internal/property/{lead_id}/hotness/", "POST", {"hotness": 0})
-        ok = int(self.api.call(f"/api/internal/property/{lead_id}/").get("hotness") or 0) == 0
-        if not ok:
-            run.reject(lead_id)
-        return ok
-
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
         problems = []
