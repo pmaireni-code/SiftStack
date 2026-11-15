@@ -86,6 +86,16 @@ def history(crm, lead_id):
     return out
 
 
+def refresh(crm, lead):
+    """The lead as it stands NOW (temperature, status, attempts, lists); the score comes from the scan."""
+    d = crm.api.call(f"/api/internal/property/{lead['id']}/")
+    st = d.get("status")
+    on = {(x.get("title") or x.get("name")) if isinstance(x, dict) else x for x in d.get("lists") or []}
+    return dict(lead, hotness=int(d.get("hotness") or 0), status=(st.get("title") if isinstance(st, dict) else st) or "",
+                calls=d.get("predictivecall_attempts") or 0, sms=d.get("sms_attempts") or 0,
+                senior=EXCLUDED_LIST in on)
+
+
 def read(crm):
     options = {u: label for f in crm.fields.values() for label, u in (f.get("options") or {}).items()}
     out = []
@@ -104,6 +114,7 @@ def read(crm):
 
 def main(*flags):
     commit = "--commit" in flags
+    limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
     crm = get_crm()
     me = pipeline_user(crm.api)
     leads = read(crm)
@@ -125,22 +136,31 @@ def main(*flags):
         print(f"  kept {n:>3} | {lst} | {why}")
     by = collections.Counter((l["list"], l["hotness"]) for l in todo)
     print("  qualify: " + ", ".join(f"{k[0]} temp {k[1]}: {v}" for k, v in sorted(by.items())))
+    todo = todo[: limit or None]
     crm.plan([{"id": l["id"], "address": l["address"], "set": {"Property Temperature": ""},
                "before": {"Property Temperature": str(l["hotness"])}} for l in todo], commit)
     if not commit:
         print("Nothing written. --commit runs it through the safety brakes (a simulation unless SIFT_MODE=live).")
         return 0
-    ok = failed = 0
+    ok = failed = skipped = 0
     for i, l in enumerate(todo):
-        if crm.reset_temperature(l["id"], l["hotness"], l["address"]):
+        now = refresh(crm, l)  # re-checked at the moment of writing: the scan above can be minutes old
+        why = verdict(now, history(crm, l["id"]), me)
+        if why:
+            skipped += 1
+            print(f"  SKIP {l['address']}: changed since the scan ({why}), left as is")
+            continue
+        if crm.reset_temperature(l["id"], now["hotness"], l["address"]):
+            print(f"  reset {l['address']} | {l['list']} | {now['hotness']} -> 0 (read back)")
             ok += 1
         else:
             failed += 1
             print(f"  WARN {l['address']}: temperature did not read back as 0")
-            if i == 0:
+            if ok == 0:
                 print("STOPPED after the first lead: it did not read back. Nothing else written.")
                 return 1
-    print(f"TEMPERATURE CLEANUP: {ok} reset to 0 and read back, {failed} failed")
+    print(f"TEMPERATURE CLEANUP: {ok} reset to 0 and read back, {skipped} skipped (changed since the scan), "
+          f"{failed} failed")
     return 1 if failed else 0
 
 

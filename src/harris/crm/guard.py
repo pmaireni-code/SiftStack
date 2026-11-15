@@ -15,7 +15,7 @@ Destructive (both profiles): a DELETE always needs SIFT_ALLOW_DESTRUCTIVE=1 or -
 Clearing a field, removing a tag or unassigning on more than BULK_DESTRUCTIVE leads needs the same,
 except a (task, field) listed in EXCEPTIONS, which carries its own reason test and cap.
 """
-import contextlib, os, re, sys, time
+import os, re, sys, time
 from collections import Counter, OrderedDict
 from datetime import date
 
@@ -44,11 +44,10 @@ EXCEPTIONS = {("harris_bid_updater", "Starting Bid"): {"max": 500, "ok": _bid_cl
 
 # DataSift's own temperature (hotness) and property status mean real seller interest AFTER a conversation:
 # the caller's to set, never the pipeline's (operator, 2026-11-11). Every write to either is refused, with no
-# flag or profile that re-enables it. The single exception is putting the temperature back to 0 from
-# temperature_cleanup.py (a field clear through the brakes), to be removed once that cleanup is done.
+# flag, profile or task that re-enables it. (The one-time exception for temperature_cleanup.py's reset to 0
+# was removed on 2026-11-15 once the operator confirmed that cleanup; the script is in archive/.)
 NATIVE_COLUMNS = ("Property Temperature", "Property Status", "Status", "Temperature")
 NATIVE_KEYS = ("hotness", "status")
-CLEANUP_TASK = "temperature_cleanup"
 
 
 def forbid_native(values):
@@ -305,25 +304,11 @@ class Run:
         m = method.upper()
         return m in ("PATCH", "PUT", "DELETE") or (m == "POST" and (headers or {}).get("x-http-method-override", "").upper() != "GET")
 
-    @contextlib.contextmanager
-    def temperature_reset(self):
-        """The one allowed temperature write: back to 0, from temperature_cleanup.py only."""
-        if self.task != CLEANUP_TASK:
-            self._block(Blocked(f"{self.task} may not write DataSift's temperature (only {CLEANUP_TASK} may reset "
-                                "it to 0)", code="native_temperature_or_status"))
-        self._temp_reset = True
-        try:
-            yield
-        finally:
-            self._temp_reset = False
-
     def _native_write(self, method, path, body):
         """A write to the native temperature or property status -> its reason, or "" when it is not one."""
         p = (path or "").split("?")[0]
         if "/hotness" in p:
-            ok = (getattr(self, "_temp_reset", False) and self.task == CLEANUP_TASK and isinstance(body, dict)
-                  and set(body) == {"hotness"} and int(body["hotness"] or 0) == 0)
-            return "" if ok else f"{method} {p}: writing DataSift's temperature is forbidden"
+            return f"{method} {p}: writing DataSift's temperature is forbidden"
         if "/property" in p and re.search(r"status", p.split("/property", 1)[1]):
             return f"{method} {p}: writing the property status is forbidden"
         if "/property" in p and isinstance(body, dict) and set(body) & set(NATIVE_KEYS):
