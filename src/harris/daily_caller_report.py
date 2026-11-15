@@ -43,6 +43,8 @@ INTEREST = re.compile(r"looking to sell|want(s)? to sell|interested in selling|i
 DNC_WORDS = re.compile(r"\bDNC\b|do not call|don'?t call|stop calling|remove (me|them|her|him)|not to be (contacted|called)|"
                        r"taken out (from|of) (the )?list|remove(d)? from (the )?list", re.I)
 HOT = {"hot lead", "warm lead"}
+PERSONAL_EVENTS = {"property.message.added", "property.status.updated", "property.predictivecall.attempts.increased",
+                   "owner.phone.status.updated", "task.created"}
 esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -165,10 +167,15 @@ def main(*flags):
             et = e.get("event_type") or ""
             if et.startswith("owner.call"):
                 c = p.get("call") or {}
+                cu = c.get("user")
+                cu = cu.get("uuid") if isinstance(cu, dict) else cu
+                if cu and cu != uid:  # smrtPhone names the user on each call: another user's call is not theirs
+                    continue
                 if not mine and e.get("source") != "smrtphone":
                     continue
                 k = c.get("uuid") or (e["timestamp"], et)
-                calls.setdefault(k, {"dir": c.get("direction"), "events": set(), "dur": 0, "ts": ts, "street": street})
+                calls.setdefault(k, {"dir": c.get("direction"), "events": set(), "dur": 0, "ts": ts, "street": street, "own": False})
+                calls[k]["own"] = calls[k]["own"] or cu == uid
                 calls[k]["events"].add(et)
                 if et == "owner.call.answered":
                     calls[k]["dur"] = int(c.get("duration") or 0)
@@ -176,7 +183,9 @@ def main(*flags):
             if et == "owner.sms.received":
                 sms_in.append((street, (p.get("sms") or {}).get("uuid")))
                 continue
-            if not mine:
+            # Only a person's actions put a lead in the report. The pipeline writes with a user's account (custom
+            # fields, phone tier tags), which must never read as that person's work (2026-11-15).
+            if not mine or et not in PERSONAL_EVENTS:
                 continue
             L = leads.setdefault(lid, {"street": street, "status": status, "notes": [], "status_changes": [], "attempts": 0})
             if et == "property.message.added":
@@ -192,9 +201,10 @@ def main(*flags):
                 t = p.get("task") or {}
                 who = (t.get("assigned_to_user") or {}).get("email") or ""
                 tasks.append((street, t.get("title") or "Task", (t.get("due_date") or "")[:10], who))
-    # a call counts for this user only if their lead or their own call: keep calls on leads they touched
+    # a call counts for this user when smrtPhone names them on it; a call with no user named counts only on a lead
+    # they worked (their notes, statuses, attempts...), and an inbound one only then too
     touched = {L["street"] for L in leads.values()}
-    calls = {k: v for k, v in calls.items() if v["street"] in touched or v["dir"] == "inbound"}
+    calls = {k: v for k, v in calls.items() if v["own"] or v["street"] in touched}
     sms_in = list(dict.fromkeys(sms_in))
     final_phone = collections.Counter()
     last = {}
@@ -246,7 +256,8 @@ def main(*flags):
         runs_html, runs_text, run_problems, got_log = automation_section(day, _arg(flags, "--run-log"))
     att_html, att_text = attempt_section(crm, flags, user)
     subject = runlog.subject_tag(run_problems, got_log) + f"Daily Report - {name} - {day:%B %-d, %Y}"
-    summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
+    summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls"
+               + (f" ({hours} Houston time)" if first else "") + " "
                f"and had {len(convo)} conversations with owners.")
     rows = [("Leads worked", len(worked)), ("Outbound calls", len(out_calls)),
             ("Inbound calls / SMS received", f"{len(in_calls)} / {len(sms_in)}"),
