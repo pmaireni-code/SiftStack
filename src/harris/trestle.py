@@ -8,7 +8,8 @@ cloud environment's proxy injects it into requests to api.trestleiq.com, so the 
 Operator's rules (2026-11-12):
   score 81-100 -> Dial First, 61-80 -> Dial Second, 41-60 -> Dial Third, 40 or less -> Drop;
   a litigator number -> Drop, and its lead gets "Litigator - Do Not Contact";
-  a lead with no number scoring 61+ and none marked correct gets "Needs Re-Skip";
+  a lead with no number left to dial (no phone, or every phone in Drop) gets "Needs Re-Skip" (rule changed
+  2026-11-15: before, any lead without a 61+ number got it, which took leads with a 41-60 number out of calling);
   every scored number is tagged "Trestle Scored", and its score and date are kept on the lead;
   a number not marked correct may be queried again after 180 days, a correct one never.
 """

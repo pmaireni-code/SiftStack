@@ -13,7 +13,7 @@ stops before querying when it would go over TRESTLE_MAX_QUERIES (default 400 = $
 
 What it writes (rules in trestle.py): per number the tags "Trestle Scored" (+ "Litigator") and the dial tier
 from the score; per lead the field "Trestle Phone Scores" (number=score@date) and the tags "Litigator - Do
-Not Contact" / "Needs Re-Skip" when they apply. The paid queries happen only after the brakes have approved
+Not Contact" / "Needs Re-Skip" (no number left to dial: every phone in Drop) when they apply. The paid queries happen only after the brakes have approved
 the plan, so a simulation never spends. Every write is read back.
 """
 import os, sys
@@ -55,6 +55,14 @@ def collect(crm, ids, today):
     return leads
 
 
+def needs_reskip(phones, tiers):
+    """"Needs Re-Skip" means NO number left to dial (operator, 2026-11-15): the lead has no phone, or every
+    phone's tier is Drop (score 40 or less, litigator, invalid, or marked DNC / wrong / dead). A number still in
+    Dial First..Fourth - scored 41+, marked correct, or not scored yet - keeps the lead off it until a caller
+    tries that number; a Wrong or Dead result makes it Drop and the lead qualifies then."""
+    return not phones or all(tiers.get(p["number"]) == PP.DROP for p in phones)
+
+
 def lead_outcome(lead):
     """After scoring: new phone tag sets, lead tags to add, field text."""
     sc = lead["scores"]
@@ -69,11 +77,7 @@ def lead_outcome(lead):
     add = []
     if any(s["litigator"] for s in sc.values()):
         add.append(T.LITIGATOR_LEAD_TAG)
-    correct = any((p.get("status") or "").upper().startswith("CORRECT") for p in lead["phones"])
-    good = any(s["score"] is not None and s["score"] >= 61 and not s["litigator"] for s in sc.values())
-    live = [p for p in lead["phones"] if not ((p.get("status") or "").upper() in PP.DEAD or "DNC" in (p.get("status") or "").upper())]
-    all_scored = all(T.digits(p["number"]) in sc for p in live)
-    if live and all_scored and not correct and not good:  # judged only once every live number has a score
+    if needs_reskip(lead["phones"], tiers):
         add.append(T.RESKIP_TAG)
     return phone_tags, [t for t in add if t not in lead["tags"]], T.format_field(sc)
 

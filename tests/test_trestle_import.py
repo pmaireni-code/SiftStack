@@ -74,10 +74,13 @@ class PlanLead(unittest.TestCase):
         self.assertIn("3468122117=100@2026-11-15", pl["text"])
         self.assertEqual(pl["type_diff"], [("8326665533", "LANDLINE", "MOBILE")], "reported, not written")
 
-    def test_needs_reskip_when_nothing_good(self):
+    def test_needs_reskip_only_when_every_phone_is_drop(self):
         self.lead()
         pl = I.plan_lead(None, "p1", self.csv_lead(**{"8326665533": 40, "3468122117": 30}))
         self.assertEqual(pl["add"], ["Needs Re-Skip"])
+        self.lead()  # a 41-60 number is Dial Third: still something to dial (2026-11-15 rule)
+        pl = I.plan_lead(None, "p1", self.csv_lead(**{"8326665533": 40, "3468122117": 60}))
+        self.assertEqual(pl["add"], [])
 
     def test_owner_changed_or_senior_skips(self):
         self.lead(owner="other")

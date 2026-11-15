@@ -286,7 +286,7 @@ the brakes approve the plan, under `TRESTLE_MAX_QUERIES` (default 400 per run). 
 |---|---|---|
 | score 81-100 / 61-80 / 41-60 / 40 or less | Dial First / Second / Third / Drop | |
 | litigator | Drop + tag Litigator | tag "Litigator - Do Not Contact" |
-| no number 61+ (once every live number is scored), none marked correct | | tag "Needs Re-Skip" |
+| no number left to dial: no phone, or every phone in Drop (2026-11-15) | | tag "Needs Re-Skip" |
 | every scored number | tag "Trestle Scored" | field "Trestle Phone Scores": `number=score@date` (`L` = litigator, `?` = invalid) |
 
 `phone_priority.py` (daily) reads that field: scored numbers take their tier from the score, a number marked

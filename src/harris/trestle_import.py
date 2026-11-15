@@ -16,7 +16,7 @@ trestle_score.lead_outcome; operator 2026-11-12):
   invalid -> Drop; litigator -> Drop; a number marked CORRECT stays Dial First) and the tag "Trestle Scored"
   (+ "Litigator"); the phone's type, status and connection flag are resent unchanged;
   per lead: the field "Trestle Phone Scores" (number=score@date, merged with what is already there, so the
-  daily phone_priority keeps these tiers) and "Litigator - Do Not Contact" / "Needs Re-Skip" when they apply.
+  daily phone_priority keeps these tiers) and "Litigator - Do Not Contact" / "Needs Re-Skip" (every phone in Drop) when they apply.
 Nothing else changes. A line type that differs from DataSift's is REPORTED, not written (no rule yet).
 If the CSV has no litigator column the litigator check was not run: the plan says so and no number is marked.
 
