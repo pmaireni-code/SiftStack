@@ -110,20 +110,28 @@ class LeadOutcome(unittest.TestCase):
             self.assertEqual(len(set(new) & PP.ALL_TIERS), 1, "exactly one tier per phone")
 
     def test_needs_reskip_rules(self):
+        """2026-11-15: Needs Re-Skip = no number left to dial (no phone, or every phone in Drop)."""
         S = __import__("trestle_score")
-        low = lambda n, s=40: {n: {"score": s, "litigator": False, "date": TODAY}}
-        # every live number scored under 61 -> Needs Re-Skip
-        self.assertIn(T.RESKIP_TAG, S.lead_outcome(self.lead([ph("7135550101"), ph("7135550109", status="DNC")],
-                                                             low("7135550101")))[1])
-        # one number not scored yet -> not judged yet
-        self.assertNotIn(T.RESKIP_TAG, S.lead_outcome(self.lead([ph("7135550101"), ph("7135550102")], low("7135550101")))[1])
-        # a number marked correct -> no re-skip
-        self.assertNotIn(T.RESKIP_TAG, S.lead_outcome(self.lead([ph("7135550101", status="CORRECT")], low("7135550101")))[1])
-        # a litigator 90 is not a good number
-        self.assertIn(T.RESKIP_TAG, S.lead_outcome(self.lead([ph("7135550101")],
-                                                             {"7135550101": {"score": 90, "litigator": True, "date": TODAY}}))[1])
+        sc = lambda **kw: {n: {"score": v, "litigator": False, "date": TODAY} for n, v in kw.items()}
+        has = lambda phones, scores, tags=(): T.RESKIP_TAG in S.lead_outcome(self.lead(phones, scores, tags))[1]
+        # every number 40 or less (one of them DNC) -> nothing to dial -> Needs Re-Skip
+        self.assertTrue(has([ph("7135550101"), ph("7135550109", status="DNC")], sc(**{"7135550101": 40})))
+        # a 60 is Dial Third: still dialable -> no Needs Re-Skip (the 4 leads of 2026-11-15)
+        self.assertFalse(has([ph("7135550101"), ph("7135550102")], sc(**{"7135550101": 60, "7135550102": 20})))
+        # a number not scored yet keeps its rule tier -> dialable
+        self.assertFalse(has([ph("7135550101"), ph("7135550102")], sc(**{"7135550101": 40})))
+        # a number marked correct stays Dial First -> dialable
+        self.assertFalse(has([ph("7135550101", status="CORRECT")], sc(**{"7135550101": 20})))
+        # a litigator 90 is Drop -> nothing to dial
+        self.assertTrue(has([ph("7135550101")], {"7135550101": {"score": 90, "litigator": True, "date": TODAY}}))
+        # an invalid number (no score) is Drop
+        self.assertTrue(has([ph("7135550101")], {"7135550101": {"score": None, "litigator": False, "date": TODAY}}))
+        # wrong / dead marked by a caller -> Drop
+        self.assertTrue(has([ph("7135550101", status="WRONG"), ph("7135550102", status="DEAD")], {}))
+        # no phone at all -> Needs Re-Skip
+        self.assertTrue(S.needs_reskip([], {}))
         # already tagged -> not added twice
-        self.assertNotIn(T.RESKIP_TAG, S.lead_outcome(self.lead([ph("7135550101")], low("7135550101"), tags=[T.RESKIP_TAG]))[1])
+        self.assertFalse(has([ph("7135550101")], sc(**{"7135550101": 40}), tags=[T.RESKIP_TAG]))
 
 
 class FakeCRM:
