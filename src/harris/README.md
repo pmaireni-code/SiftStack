@@ -153,8 +153,9 @@ fields shared by every list (group "Prospect"):
 
 Deal Grade and Lead Temperature are still written as before (the probate Hot / Warm presets filter on
 Lead Temperature). Until 2026-11-11 the grader and the probate / senior uploads set DataSift's temperature
-(Hot 5, Warm 3) before any contact; `temperature_cleanup.py` puts those back to 0, only where nobody has
-talked to the owner yet (see its docstring). Contract, for the record: `PATCH /property/{uuid}/
+(Hot 5, Warm 3) before any contact; a one-time cleanup put 122 of those back to 0 on 2026-11-13, only where
+nobody had talked to the owner (script and result in `archive/temperature_cleanup/`). Since 2026-11-15 no
+code can write DataSift's temperature or property status: the brakes refuse it with no exception. Contract, for the record: `PATCH /property/{uuid}/
 {"hotness": n}` is accepted and ignored; the app writes `POST /property/{uuid}/hotness/ {"hotness": n}`.
 
 ## Probate (stage 2, live 2026-11-01: 53 leads uploaded and read back)
