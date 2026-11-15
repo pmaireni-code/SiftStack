@@ -163,9 +163,16 @@ def scan(crm, start, end, budget_s=BUDGET_S, clock=time.monotonic):
     return out
 
 
-def section(res, start, end, history=None):
+def only_caller(res, name):
+    """The scan result restricted to leads one caller dialed (a personal report shows only that user's work)."""
+    who = name.strip().lower()
+    mine = lambda x: who in {c.lower() for c in x.get("callers") or []}
+    return dict(res, forgot=[x for x in res["forgot"] if mine(x)], inconsistent=[x for x in res["inconsistent"] if mine(x)])
+
+
+def section(res, start, end, history=None, week_total=True):
     """-> (html, text, counts for the public run log: numbers only). history: [(Houston date, forgot count)]
-    of earlier reports, for the 7-day total."""
+    of earlier reports, for the 7-day total (week_total=False drops that line: a personal report)."""
     span = f"{start.astimezone(HOU):%a %b %-d %-I:%M %p} - {end.astimezone(HOU):%a %b %-d %-I:%M %p} (Houston)"
     counts = {"attempt_forgot": len(res["forgot"]), "attempt_inconsistent": len(res["inconsistent"]),
               "attempt_checked": res["checked"], "attempt_unchecked": res["unchecked"]}
@@ -186,7 +193,7 @@ def section(res, start, end, history=None):
     html = (head + f"<p>Window: {escape(span)}. {res['checked']} called-capable leads checked.</p>" + partial
             + "<p><b>Probable missed increment</b> (calls, counter not raised):</p>" + table
             + ("<p><b>Inconsistent history</b> (informative, not a caller error):</p><ul>" + inc + "</ul>" if inc else "")
-            + f"<p>Total today: {len(res['forgot'])} | last 7 days: {week}</p>")
+            + f"<p>Total today: {len(res['forgot'])}" + (f" | last 7 days: {week}" if week_total else "") + "</p>")
     text = ["Leads called without attempt increment", f"Window: {span}. {res['checked']} leads checked."]
     if res["unchecked"]:
         text.append(f"PARTIAL: time limit reached; {res['unchecked']} lead(s) not checked.")
@@ -196,5 +203,5 @@ def section(res, start, end, history=None):
     if res["inconsistent"]:
         text.append("Inconsistent history (informative):")
         text += [f"- {x['address'] or x['id'][:8]}: {x['reason']}" for x in res["inconsistent"]]
-    text.append(f"Total today: {len(res['forgot'])} | last 7 days: {week}")
+    text.append(f"Total today: {len(res['forgot'])}" + (f" | last 7 days: {week}" if week_total else ""))
     return html, "\n".join(text), counts

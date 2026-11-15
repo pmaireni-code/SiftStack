@@ -167,5 +167,52 @@ class Scan(unittest.TestCase):
         self.assertEqual(rec["window_end"], END.isoformat())
 
 
+class PersonalReports(unittest.TestCase):
+    """2026-11-15: one shared scan, a personal report keeps only the user's own rows and never publishes."""
+    RES = {"forgot": [{"id": "a", "address": "1 Elm St, 77001", "times": ["Mon 2:00 PM"], "numbers": 1,
+                       "callers": ["Charles Cator"], "reason": "", "link": "x"},
+                      {"id": "b", "address": "2 Oak St, 77001", "times": ["Mon 3:00 PM"], "numbers": 1,
+                       "callers": ["Maireni Peguero"], "reason": "", "link": "y"}],
+           "inconsistent": [{"id": "c", "address": "3 Pine St", "reason": "r", "callers": ["Charles Cator"]},
+                            {"id": "d", "address": "", "reason": "history could not be read"}],
+           "checked": 10, "unchecked": 0, "skipped_senior": 0, "error": ""}
+
+    def test_only_caller(self):
+        c = A.only_caller(self.RES, "charles cator")
+        self.assertEqual([x["id"] for x in c["forgot"]], ["a"])
+        self.assertEqual([x["id"] for x in c["inconsistent"]], ["c"])
+        m = A.only_caller(self.RES, "Maireni Peguero")
+        self.assertEqual([x["id"] for x in m["forgot"]], ["b"])
+        self.assertEqual(m["inconsistent"], [])
+
+    def test_personal_section_has_no_week_total(self):
+        from datetime import datetime, timezone
+        t = datetime(2026, 11, 16, 1, tzinfo=timezone.utc)
+        html, text, _ = A.section(A.only_caller(self.RES, "charles cator"), t, t, week_total=False)
+        self.assertIn("Total today: 1", text)
+        self.assertNotIn("last 7 days", text + html)
+        self.assertNotIn("2 Oak St", text + html)
+
+    def test_daily_report_reuses_the_cache_and_never_publishes(self):
+        import json, tempfile, daily_caller_report as D
+        from datetime import datetime, timezone
+        f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump({"res": self.RES, "start": datetime(2026, 11, 15, 1, tzinfo=timezone.utc).isoformat(),
+                   "end": datetime(2026, 11, 16, 1, tzinfo=timezone.utc).isoformat()}, f)
+        f.close()
+        published = []
+        orig = D.runlog.publish
+        D.runlog.publish = lambda rows: published.append(rows) or (True, "")
+        try:
+            html, text = D.attempt_section(None, ("--attempt-from", f.name), "maireni peguero")
+        finally:
+            D.runlog.publish = orig
+        self.assertIn("2 Oak St", text)
+        self.assertNotIn("1 Elm St", text)
+        self.assertEqual(published, [])
+        html, text = D.attempt_section(None, ("--attempt-from", "/nonexistent.json"), "x")
+        self.assertIn("Not available today", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
