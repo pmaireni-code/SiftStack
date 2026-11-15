@@ -17,6 +17,13 @@ calls from their number or user, notes, status changes, phone dispositions, task
   - called leads with no note -> listed
 Conversations = leads whose note says the caller spoke with someone, or whose status changed.
 Operator's schedule (2026-11-11): Monday to Friday, 7:00 p.m. Houston time.
+
+Three emails a day (operator, 2026-11-15), one scan of the attempt counter shared by all three:
+    --user "charles cator" --attempt-cache FILE            the full report (automation runs included; publishes the
+                                                           attempt line to run-logs and saves the scan to FILE)
+    --user "charles cator" --personal --greet Charles --attempt-from FILE    Charles's own work only
+    --user "maireni peguero" --personal --greet Maireni --attempt-from FILE  Maireni's own work only
+--personal drops the automation runs and keeps only the attempt rows the user dialed; it never publishes.
 """
 import collections, json, os, re, sys
 from datetime import date, datetime, timedelta, timezone
@@ -36,6 +43,8 @@ INTEREST = re.compile(r"looking to sell|want(s)? to sell|interested in selling|i
 DNC_WORDS = re.compile(r"\bDNC\b|do not call|don'?t call|stop calling|remove (me|them|her|him)|not to be (contacted|called)|"
                        r"taken out (from|of) (the )?list|remove(d)? from (the )?list", re.I)
 HOT = {"hot lead", "warm lead"}
+PERSONAL_EVENTS = {"property.message.added", "property.status.updated", "property.predictivecall.attempts.increased",
+                   "owner.phone.status.updated", "task.created"}
 esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -61,11 +70,26 @@ def automation_section(day, path=None):
     return html, text, problems, True
 
 
-def attempt_section(crm, flags):
+def _arg(flags, name, default=None):
+    return flags[flags.index(name) + 1] if name in flags else default
+
+
+def attempt_section(crm, flags, user=""):
     """"Leads called without attempt increment" (attempt_report.py). Never stops the email: any failure becomes a
     line in the section. Its counts (no addresses) and its window end go to the public run log, so the next report
     starts where this one ended and the 7-day total can be summed."""
     now = datetime.now(timezone.utc)
+    if _arg(flags, "--attempt-from"):  # a personal report: reuse the day's scan, never publish
+        try:
+            c = json.load(open(_arg(flags, "--attempt-from")))
+            res = attempt_report.only_caller(c["res"], user)
+            html, text, _ = attempt_report.section(res, datetime.fromisoformat(c["start"]), datetime.fromisoformat(c["end"]),
+                                                   week_total=False)
+            return html, text
+        except Exception as e:  # noqa: BLE001
+            msg = f"Not available today (the shared check did not run or could not be read: {str(e)[:100]})."
+            return ("<h3>Leads called without attempt increment</h3>"
+                    f'<p style="color:#b00020;font-weight:bold">{esc(msg)}</p>', "Leads called without attempt increment: " + msg)
     try:
         past = []
         for i in range(0, 8):  # today and the 7 days before: earlier reports' cuts and counts
@@ -82,6 +106,8 @@ def attempt_section(crm, flags):
         budget = float(os.environ.get("ATTEMPT_REPORT_BUDGET_S") or attempt_report.BUDGET_S)
         res = attempt_report.scan(crm, start, now, budget_s=budget)
         html, text, counts = attempt_report.section(res, start, now, history)
+        if _arg(flags, "--attempt-cache"):
+            json.dump({"res": res, "start": start.isoformat(), "end": now.isoformat()}, open(_arg(flags, "--attempt-cache"), "w"))
     except Exception as e:  # noqa: BLE001 (the 7 pm email must go out whatever happens here)
         msg = f"Could not build this section today: {str(e)[:160]}."
         return ("<h3>Leads called without attempt increment</h3>"
@@ -141,10 +167,15 @@ def main(*flags):
             et = e.get("event_type") or ""
             if et.startswith("owner.call"):
                 c = p.get("call") or {}
+                cu = c.get("user")
+                cu = cu.get("uuid") if isinstance(cu, dict) else cu
+                if cu and cu != uid:  # smrtPhone names the user on each call: another user's call is not theirs
+                    continue
                 if not mine and e.get("source") != "smrtphone":
                     continue
                 k = c.get("uuid") or (e["timestamp"], et)
-                calls.setdefault(k, {"dir": c.get("direction"), "events": set(), "dur": 0, "ts": ts, "street": street})
+                calls.setdefault(k, {"dir": c.get("direction"), "events": set(), "dur": 0, "ts": ts, "street": street, "own": False})
+                calls[k]["own"] = calls[k]["own"] or cu == uid
                 calls[k]["events"].add(et)
                 if et == "owner.call.answered":
                     calls[k]["dur"] = int(c.get("duration") or 0)
@@ -152,7 +183,9 @@ def main(*flags):
             if et == "owner.sms.received":
                 sms_in.append((street, (p.get("sms") or {}).get("uuid")))
                 continue
-            if not mine:
+            # Only a person's actions put a lead in the report. The pipeline writes with a user's account (custom
+            # fields, phone tier tags), which must never read as that person's work (2026-11-15).
+            if not mine or et not in PERSONAL_EVENTS:
                 continue
             L = leads.setdefault(lid, {"street": street, "status": status, "notes": [], "status_changes": [], "attempts": 0})
             if et == "property.message.added":
@@ -168,9 +201,10 @@ def main(*flags):
                 t = p.get("task") or {}
                 who = (t.get("assigned_to_user") or {}).get("email") or ""
                 tasks.append((street, t.get("title") or "Task", (t.get("due_date") or "")[:10], who))
-    # a call counts for this user only if their lead or their own call: keep calls on leads they touched
+    # a call counts for this user when smrtPhone names them on it; a call with no user named counts only on a lead
+    # they worked (their notes, statuses, attempts...), and an inbound one only then too
     touched = {L["street"] for L in leads.values()}
-    calls = {k: v for k, v in calls.items() if v["street"] in touched or v["dir"] == "inbound"}
+    calls = {k: v for k, v in calls.items() if v["own"] or v["street"] in touched}
     sms_in = list(dict.fromkeys(sms_in))
     final_phone = collections.Counter()
     last = {}
@@ -214,10 +248,16 @@ def main(*flags):
     # The day's automation steps, from the run-logs branch where each scheduled run pushes its lines
     # (crm/runlog.py); --run-log FILE reads a local file instead. Blocked and failed steps come first and are
     # named in the subject; no log at all for the day is said in the subject too, never shown as a quiet day.
-    runs_html, runs_text, run_problems, got_log = automation_section(day, flags[flags.index("--run-log") + 1] if "--run-log" in flags else None)
-    att_html, att_text = attempt_section(crm, flags)
+    personal = "--personal" in flags
+    greet = _arg(flags, "--greet", "Maireni")
+    if personal:  # the user's own work only: no automation runs (and so no automation tags in the subject)
+        runs_html, runs_text, run_problems, got_log = "", "", [], True
+    else:
+        runs_html, runs_text, run_problems, got_log = automation_section(day, _arg(flags, "--run-log"))
+    att_html, att_text = attempt_section(crm, flags, user)
     subject = runlog.subject_tag(run_problems, got_log) + f"Daily Report - {name} - {day:%B %-d, %Y}"
-    summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls ({hours} Houston time) "
+    summary = (f"{name} worked {len(worked)} leads with {len(out_calls)} outbound calls"
+               + (f" ({hours} Houston time)" if first else "") + " "
                f"and had {len(convo)} conversations with owners.")
     rows = [("Leads worked", len(worked)), ("Outbound calls", len(out_calls)),
             ("Inbound calls / SMS received", f"{len(in_calls)} / {len(sms_in)}"),
@@ -228,17 +268,17 @@ def main(*flags):
     tbl = lambda head, body: ('<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse"><tr>'
                               + "".join(f'<th align="left">{h}</th>' for h in head) + "</tr>"
                               + "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in body) + "</table>")
-    html = (f"<p>Hi Maireni,</p><p><b>Summary:</b> {esc(summary)}</p><h3>Daily results</h3>" + tbl(["Metric", "Result"], rows)
+    html = (f"<p>Hi {esc(greet)},</p><p><b>Summary:</b> {esc(summary)}</p><h3>Daily results</h3>" + tbl(["Metric", "Result"], rows)
             + "<h3>Conversations with owners</h3>"
             + (tbl(["Lead", "Note", "Status"], [(c["street"], c["note"], c["status"]) for c in convo]) if convo else "<p>None today.</p>")
             + "<h3>To do</h3>" + ("<ol>" + "".join(f"<li>{t}</li>" for t in todo) + "</ol>" if todo else "<p>Nothing pending from today's records.</p>")
             + runs_html + att_html
             + f"<p><i>Source: DataSift activity logs (smrtPhone calls, notes, statuses, phone dispositions) for {day:%B %-d, %Y}, Houston time.</i></p>")
     strip = lambda s: re.sub(r"<[^>]+>", "", s)
-    text = (f"Hi Maireni,\n\nSummary: {summary}\n\nResults: " + "; ".join(f"{k}: {v}" for k, v in rows)
+    text = (f"Hi {greet},\n\nSummary: {summary}\n\nResults: " + "; ".join(f"{k}: {v}" for k, v in rows)
             + "\n\nConversations:\n" + ("\n".join(f"- {c['street']}: {c['note']} ({c['status']})" for c in convo) or "None today.")
             + "\n\nTo do:\n" + ("\n".join(f"{i}. {strip(t)}" for i, t in enumerate(todo, 1)) or "Nothing pending.")
-            + "\n\n" + runs_text + "\n\n" + att_text
+            + ("\n\n" + runs_text if runs_text else "") + "\n\n" + att_text
             + f"\n\nSource: DataSift activity logs for {day:%B %-d, %Y}, Houston time.")
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     open(out + ".html", "w").write(html)
