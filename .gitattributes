@@ -32,3 +32,8 @@ dist/**      binary
 # The plugin marketplace is generated and byte-compared in CI, same as skills/.
 .claude-plugin/** text=auto eol=lf
 marketplace/**    text=auto eol=lf
+
+# Windows tools run with cmd.exe / PowerShell on the operator's machine: a .bat checked out with LF line
+# endings can misparse in cmd, so these keep CRLF everywhere (overrides tools/** above).
+tools/trestle/*.bat  text eol=crlf
+tools/trestle/*.ps1  text eol=crlf

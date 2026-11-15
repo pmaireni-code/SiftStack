@@ -1,0 +1,5 @@
+# Results carry owners' names, addresses and phone numbers: never commit them (the repo is public).
+*.xlsx
+*.csv
+*.jsonl
+completed/
