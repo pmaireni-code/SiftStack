@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Daily Harris run: Starting Bid, postponements, Foreclosure Status and Deal Grade for every lead,
 # then probate leads assigned to their user 14 days after the death (probate_assign.py), and the
-# dialing order of every phone on the call pipeline (phone_priority.py).
+# dialing order of every phone on the call pipeline (phone_priority.py), and the skip-trace queue
+# (skiptrace_queue.py: qualifying foreclosure leads with no phone get "Skip Trace Batch 1").
 #
 #   bash src/harris/run_daily.sh [--dry-run]
 #
@@ -25,6 +26,7 @@ market()       { cd src/harris && python3 market_datasift.py "../../$W/market.js
 grade()        { cd src/harris && python3 harris_grade.py "../../$W/market.json" "../../$W/graded.csv" --crm $COMMIT | tee "../../$W/grade.log" | { grep -vE "^  (OK|DRY)" || true; }; }
 probate()      { cd src/harris && python3 probate_assign.py $COMMIT | tee "../../$W/probate_assign.log"; }
 phones()       { cd src/harris && python3 phone_priority.py $COMMIT | tee "../../$W/phone_priority.log"; }
+stqueue()      { cd src/harris && python3 skiptrace_queue.py $COMMIT | tee "../../$W/skiptrace_queue.log"; }
 summary() {
 python3 - "$W/graded.csv" <<'PY'
 import csv, sys
@@ -49,5 +51,6 @@ step "market finder"   -- market
 step "deal grade"      needs "$W/market.json" -- grade
 step "probate assign"  -- probate        # Maireni Peguero, 14 days after the death
 step "phone priority"  -- phones         # Priority 1 / Blitz Active
+step "skip trace queue" -- stqueue       # single family, <= $400k, equity >= 40%, no phone -> Skip Trace Batch 1
 step "summary"         needs "$W/graded.csv" -- summary
 run_footer "$COMMIT"
