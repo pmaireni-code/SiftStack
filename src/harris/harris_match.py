@@ -270,7 +270,7 @@ def main(ocr_dir, idx_path, out_path):
         w.writerows(rows)
     hit = sum(r["match"] != "NONE" for r in rows)
     print(f"{hit}/{len(rows)} matched ({sum(r['match']=='address' for r in rows)} by address, "
-          f"{sum(r["match"]=="legal" for r in rows)} by legal, {sum(r["match"]=="apn" for r in rows)} by apn, {sum(r["match"]=="name" for r in rows)} by name), {sum(r['name_confirmed'] for r in rows)} name-confirmed")
+          f"{sum(r['match']=='legal' for r in rows)} by legal, {sum(r['match']=='apn' for r in rows)} by apn, {sum(r['match']=='name' for r in rows)} by name), {sum(r['name_confirmed'] for r in rows)} name-confirmed")
 
 
 if __name__ == "__main__":
