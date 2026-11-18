@@ -15,7 +15,7 @@ the tag are left alone. It only ADDS that tag (nothing is removed or overwritten
 Runs in the daily (run_daily.sh) and the weekly upload (run_weekly.sh), so new leads join the queue the day
 they arrive; DataSift's skip trace itself is never run over the API (forbidden by the brakes).
 """
-import os, sys
+import os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crm import get_crm  # noqa: E402
@@ -39,8 +39,27 @@ def num(v):
         return None
 
 
-def why_not(d):
-    """"" when the lead joins the queue, else the reason it does not."""
+ENTITY_WORDS = re.compile(r"\b(LLC|L\.?L\.?C|INC|CORP|CORPORATION|COMPANY|CO|LTD|LP|L\.?P|LLP|PLLC|TRUST|TRUSTEE|ESTATE OF|"
+                          r"HOLDINGS?|GROUP|PROPERTIES|INVESTMENTS?|PARTNERS|VENTURES|ENTERPRISES?|BANK|NATIONAL ASSOCIATION|"
+                          r"MORTGAGE|FUNDING|CAPITAL|REALTY|HOMES|ASSOCIATION|CHURCH|MINISTRIES|FOUNDATION)\b", re.I)
+
+
+def owner_name(d):
+    o = d.get("owner") or {}
+    return (o.get("company") or " ".join(x for x in (o.get("first_name"), o.get("last_name")) if x) or "").strip()
+
+
+def is_entity(d):
+    """An LLC, company, trust or bank owns it: DataSift's skip trace (people only) never processes it."""
+    o = d.get("owner") or {}
+    if o.get("company") and not (o.get("first_name") or o.get("last_name")):
+        return True
+    return bool(ENTITY_WORDS.search(owner_name(d)))
+
+
+def why_not(d, entities_too=False):
+    """"" when the lead joins the queue, else the reason it does not. A business-owned lead goes to
+    entity_owner.py instead (operator, 2026-11-18); entities_too=True judges it on the other rules only."""
     tags = {N(t) for t in d.get("tags") or []}
     lists = {N(x) for x in d.get("lists") or []}
     st = d.get("status")
@@ -56,6 +75,8 @@ def why_not(d):
         return "already skip traced"
     if TAG in tags:
         return "already queued"
+    if not entities_too and is_entity(d):
+        return "owned by a company / trust (entity_owner.py)"
     if d.get("structure_type") != STRUCTURE:
         return "not single family"
     if value is None or value > MAX_VALUE:
