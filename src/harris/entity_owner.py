@@ -129,7 +129,9 @@ def decide(d, kind, rec, cands, today=None):
 def candidates(crm):
     """Entity-owned foreclosure leads with no phone that are in the skip-trace queue or qualify for it."""
     out = []
-    for r in crm.list_assignments(Q.LIST, ()):
+    for r in crm.list_assignments(Q.LIST, ("Foreclosure Status",)):
+        if Q.foreclosure_status(crm, r) in Q.DEAD_FORECLOSURE:  # dead for this sale: not worth the lookup
+            continue
         d = crm.api.call(f"/api/internal/property/{r['id']}/")
         tags = {N(t) for t in d.get("tags") or []}
         if not is_entity(d) or tags & {TAG_OK, TAG_VERIFY}:
