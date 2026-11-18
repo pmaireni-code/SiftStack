@@ -57,7 +57,16 @@ def is_entity(d):
     return bool(ENTITY_WORDS.search(owner_name(d)))
 
 
-def why_not(d, entities_too=False):
+DEAD_FORECLOSURE = {"Deadline Passed", "Auction Passed"}  # harris_status: the lead is dead for this sale
+
+
+def foreclosure_status(crm, row):
+    """The lead's Foreclosure Status label from a list_assignments row (the field holds an option uuid)."""
+    v = row.get("Foreclosure Status") or ""
+    return {u: label for label, u in ((crm.fields.get("Foreclosure Status") or {}).get("options") or {}).items()}.get(v, v)
+
+
+def why_not(d, entities_too=False, fstatus=""):
     """"" when the lead joins the queue, else the reason it does not. A business-owned lead goes to
     entity_owner.py instead (operator, 2026-11-18); entities_too=True judges it on the other rules only."""
     tags = {N(t) for t in d.get("tags") or []}
@@ -67,6 +76,8 @@ def why_not(d, entities_too=False):
     value, eq = num(d.get("estimate_value")), num(d.get("equity_percent"))
     if SENIOR in lists:
         return "on Senior Equity"
+    if fstatus in DEAD_FORECLOSURE:
+        return f"foreclosure {fstatus.lower()} (dead for this sale)"
     if st in DEAD:
         return f"status {st}"
     if (d.get("owner") or {}).get("phones"):
@@ -91,9 +102,9 @@ def main(*flags):
     limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
     crm = get_crm()
     todo, why = [], {}
-    for r in crm.list_assignments(LIST, ()):
+    for r in crm.list_assignments(LIST, ("Foreclosure Status",)):
         d = crm.api.call(f"/api/internal/property/{r['id']}/")
-        w = why_not(d)
+        w = why_not(d, fstatus=foreclosure_status(crm, r))
         why[w or "QUEUE"] = why.get(w or "QUEUE", 0) + 1
         if not w:
             todo.append((r["id"], (d.get("address") or {}).get("street") or r["id"], [N(t) for t in d.get("tags") or []]))
