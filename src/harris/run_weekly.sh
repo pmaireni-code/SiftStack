@@ -52,6 +52,7 @@ bids()     { node src/harris/bid_sources.js "$W/bids.json"
              cd src/harris && python3 harris_bid_updater.py "../../$W/leads.csv" "../../$W/bids.json" "../../$W/leads.csv"; }
 upload()   { python3 -u src/harris/harris_upload.py "$W/leads.csv" $COMMIT | tee "$W/upload.log" | { grep -vE "^  OK" || true; }
              test "${PIPESTATUS[0]}" -eq 0; }
+stqueue()  { cd src/harris && python3 skiptrace_queue.py $COMMIT | tee "../../$W/skiptrace_queue.log"; }
 result()   { echo "RESULT: $(grep -c . "$W/leads.csv" | awk '{print $1-1}') leads from $(ls "$W"/notices/*.pdf | wc -l) new notices; $(grep -cE '^  FAIL' "$W/upload.log" || true) failed"; }
 
 echo "== notices filed in the last $SINCE_DAYS days for sales ${MONTHS[*]}"
@@ -62,5 +63,6 @@ step "ocr"        -- ocr
 step "match"      needs work/hcad/idx.tsv -- match
 step "bids"       needs "$W/leads.csv" -- bids
 step "upload"     needs "$W/leads.csv" -- upload
+step "skip trace queue" -- stqueue   # new leads that qualify and have no phone -> Skip Trace Batch 1
 step "result"     needs "$W/leads.csv" -- result
 run_footer "$COMMIT"
