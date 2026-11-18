@@ -22,6 +22,8 @@ class Queue(unittest.TestCase):
         self.assertIn("phones", Q.why_not(d(owner={"phones": [{"number": "1"}]})))
         self.assertIn("skip traced", Q.why_not(d(tags=[{"name": "REISift Skipped"}])))
         self.assertIn("skip traced", Q.why_not(d(tags=[{"name": "Skip Trace No Result"}])))
+        self.assertIn("skip traced", Q.why_not(d(tags=[{"name": "DataSift Skipped"}])), "renamed by 2026-11-17")
+        self.assertIn("skip traced", Q.why_not(d(tags=[{"name": "DataSift Skipped 11/26"}])))
         self.assertIn("queued", Q.why_not(d(tags=[{"name": "Skip Trace Batch 1"}])))
         self.assertIn("single family", Q.why_not(d(structure_type="Duplex (2 units, any combination)")))
         self.assertIn("400k", Q.why_not(d(estimate_value=400001)))

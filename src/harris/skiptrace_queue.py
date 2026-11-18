@@ -7,7 +7,7 @@ Operator's rule (2026-11-17): every lead on "Harris - Foreclosure" that is
   - Single Family Residential,
   - estimated value $400,000 or less,
   - high equity: Equity Percent at or above harris_grade.EQUITY_HOT (40%),
-  - with NO phone, and never skip traced (no "REISift Skipped", no "Skip Trace No Result"),
+  - with NO phone, and never skip traced (no "REISift Skipped" / "DataSift Skipped", no "Skip Trace No Result"),
 gets the tag "Skip Trace Batch 1", the tag the operator runs DataSift's skip trace on. Leads also on
 "Harris - Senior Equity", leads with a dead / closed / not-interested status, and leads that already carry
 the tag are left alone. It only ADDS that tag (nothing is removed or overwritten); every write is read back.
@@ -23,7 +23,10 @@ from harris_grade import EQUITY_HOT  # noqa: E402
 
 LIST, SENIOR = "Harris - Foreclosure", "Harris - Senior Equity"
 TAG = "Skip Trace Batch 1"
-TRACED = {"REISift Skipped", "Skip Trace No Result"}
+# DataSift's skip trace tags the record "REISift Skipped" (+ month), renamed "DataSift Skipped" (+ month)
+# by 2026-11-17; "Skip Trace No Result" is the operator's tag for a trace that found no phone.
+TRACED_PREFIXES = ("REISift Skipped", "DataSift Skipped")
+TRACED = {"Skip Trace No Result"}
 STRUCTURE, MAX_VALUE = "Single Family Residential", 400000
 DEAD = {"dead lead", "dead", "not_interested", "not interested", "closed", "sold", "dnc", "lost_deal"}
 N = lambda t: (t.get("name") or t.get("title")) if isinstance(t, dict) else t
@@ -49,7 +52,7 @@ def why_not(d):
         return f"status {st}"
     if (d.get("owner") or {}).get("phones"):
         return "has phones"
-    if tags & TRACED:
+    if tags & TRACED or any(str(t).startswith(TRACED_PREFIXES) for t in tags):
         return "already skip traced"
     if TAG in tags:
         return "already queued"
