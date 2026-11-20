@@ -5,8 +5,9 @@ Auth: JWT minted from DATASIFT_EMAIL / DATASIFT_PASSWORD (datasift_api_upload.Ap
 - custom field values read back from GET /property/{uuid}/custom-field/, keyed by custom_field.uuid;
   dates are written YYYY-MM-DD, selects as the option uuid
 - estimate_value / year / sqft / apn / auction_date are native fields, written with a PATCH
-- add-notes APPENDS and notes cannot be edited over the API: a note whose notice doc id is already on
-  the record is skipped
+- notes go to the record's message board (POST /property/{uuid}/message/ {"message"}); the old
+  /add-notes/ route answers 404 since 2026-11 (found 2026-11-20). A note whose key (the notice doc id, or
+  a marker) is already on the record (board or legacy notes field) is skipped
 - /api/internal/ throttles at ~2 req/s: PatientApi waits out 429s and 5xx
 """
 import os, re, sys, time
@@ -227,12 +228,13 @@ class DataSiftCRM(CRM):
             self.api.call(f"/api/internal/property/{uuid}/custom-field/update-values/", "PATCH",
                           [{"field_uuid": v["field_uuid"], "value": v["value"]} for v in values])
         if row.get("Notes"):
-            # add-notes APPENDS, so a re-run would stack the same note again: skip when this
+            # a note APPENDS (message board), so a re-run would stack the same note again: skip when this
             # notice's doc id is already in the record's notes
             doc = row.get("Note Key") or (row["Notes"].split("foreclosure notice ", 1)[1].split()[0] if "foreclosure notice " in row["Notes"] else "")
-            have = (self.api.call(f"/api/internal/property/{uuid}/").get("notes") or "") if res.get("existing") else ""
+            have = self.notes_text(uuid) if res.get("existing") else ""
             if not doc or doc not in have:
-                self.api.call(f"/api/internal/property/{uuid}/add-notes/", "POST", {"notes": row["Notes"][:2000]})
+                if not self.add_note(uuid, row["Notes"][:2000]):
+                    problems.append("note did not read back")
         # DataSift's own temperature and property status are the caller's, after talking to the seller: never
         # written here (operator, 2026-11-11). The prospect score goes to Prospect Score / Prospect Reasons.
         problems += self._read_back(uuid, values, native, row)
@@ -414,6 +416,21 @@ class DataSiftCRM(CRM):
         cf = self.api.call(f"/api/internal/property/{lead_id}/custom-field/")
         return next(((x.get("value") or "") for x in (cf.get("results") or [])
                      if (x.get("custom_field") or {}).get("uuid") == f["uuid"]), "")
+
+    # ---- notes (the record's message board)
+    def notes_text(self, lead_id):
+        """Everything written as notes on a lead: the board messages plus the legacy notes field."""
+        r = self.api.call(f"/api/internal/property/{lead_id}/message/?limit=100")
+        msgs = r.get("results") or r.get("data") or [] if isinstance(r, dict) else r or []
+        legacy = self.api.call(f"/api/internal/property/{lead_id}/").get("notes") or ""
+        return "\n".join([str(legacy)] + [str(m.get("message") or "") for m in msgs if isinstance(m, dict)])
+
+    def add_note(self, lead_id, text):
+        """Post one note on the lead's message board; True when it reads back."""
+        if guard.current().before_write(lead_id, {"other": ["note"]}):
+            return True
+        self.api.call(f"/api/internal/property/{lead_id}/message/", "POST", {"message": text})
+        return text[:120] in self.notes_text(lead_id)
 
     # ---- daily write-back
     def update_lead(self, lead_id, values, add_tags):
