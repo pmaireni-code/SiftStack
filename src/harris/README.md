@@ -89,7 +89,7 @@ statement, so a contract signed near the deadline should already have the payoff
 - Custom field values read back from `GET /api/internal/property/{uuid}/custom-field/`, keyed by
   `custom_field.uuid`; dates are written as `YYYY-MM-DD`, selects as the option uuid.
 - Native fields `estimate_value`, `year`, `sqft`, `apn` and `auction_date` take a `PATCH` on the record.
-- `add-notes` APPENDS and the record's `notes` cannot be edited over the API, so the uploader skips a
+- Notes go to the record's message board (`POST /property/{uuid}/message/`): the old `add-notes` route answers 404 since 2026-11. Notes cannot be edited over the API, so the uploader skips a
   note whose notice doc id is already on the record.
 
 ## Switching CRM (src/harris/crm/)
