@@ -429,8 +429,9 @@ def upload_rows(rows: list[dict], *, commit: bool = False,
             if uuid and row.get("Notes"):
                 # notes are dropped from the property payload; post separately
                 try:
-                    api.call("/api/internal/property/%s/add-notes/" % uuid,
-                             "POST", {"notes": row["Notes"][:2000]})
+                    # /add-notes/ answers 404 since 2026-11; the record's message board is the route now
+                    api.call("/api/internal/property/%s/message/" % uuid,
+                             "POST", {"message": row["Notes"][:2000]})
                 except Exception:
                     pass
         except Exception as e:

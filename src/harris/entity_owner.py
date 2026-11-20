@@ -180,15 +180,15 @@ def main(*flags):
     ok = bad = 0
     for lid, d, tag, note in plans:
         before = [N(t) for t in d.get("tags") or []]
-        if MARKER not in str(crm.api.call(f"/api/internal/property/{lid}/").get("notes") or ""):
-            crm.api.call(f"/api/internal/property/{lid}/add-notes/", "POST", {"notes": note})
+        if MARKER not in crm.notes_text(lid):
+            crm.add_note(lid, note)
         crm.update_lead(lid, {}, [tag])
         if Q.TAG in before:
             crm.api.call(f"/api/internal/property/{lid}/remove-tags/", "POST", {"tags": [Q.TAG]})
         back = crm.api.call(f"/api/internal/property/{lid}/")
         tags = [N(t) for t in back.get("tags") or []]
         want = (set(before) - {Q.TAG}) | {tag}
-        if set(tags) == want and MARKER in str(back.get("notes") or ""):
+        if set(tags) == want and MARKER in crm.notes_text(lid):
             ok += 1
         else:
             bad += 1
