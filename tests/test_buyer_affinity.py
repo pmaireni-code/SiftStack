@@ -107,10 +107,29 @@ class Grouping(unittest.TestCase):
         self.assertEqual(len(BA.group_nodes({"DELTA BUILD": llc, "SMITH JAMES A": far})), 2)
         self.assertEqual(len(BA.group_nodes({"DELTA BUILD": llc, "SMITH JAMES A": near})), 1)
 
-    def test_parent_company_groups(self):
-        nodes = {"OMEGA TX": {"people": set(), "entities": {"OMEGA TX", "OMEGA USA"}},
-                 "OMEGA USA": {"people": set(), "entities": {"OMEGA USA"}}}
-        self.assertEqual(len(BA.group_nodes(nodes)), 1)
+    def test_parent_company_or_trust_alone_does_not_group(self):
+        nodes = {"OMEGA TX": {"people": {"OMEGA USA LLC"}, "self": set(), "zips": {"78731"}},
+                 "OMEGA FL": {"people": {"OMEGA USA LLC", "The Richard Moe Section"}, "self": set(), "zips": {"78731"}},
+                 "OMEGA GA": {"people": {"Richard H Moe 2006 Trust", "The Richard Moe Section"}, "self": set(), "zips": set()}}
+        self.assertEqual(len(BA.group_nodes(nodes)), 3)
+
+    def test_shared_address_only_is_flagged_not_grouped(self):
+        groups = [({"ALPHA HOMES"}, ""), ({"ZETA INVESTMENT GROUP"}, ""), ({"ETA INTERESTS"}, "")]
+        names = {"ALPHA HOMES": "ALPHA HOMES LLC", "ZETA INVESTMENT GROUP": "ZETA INVESTMENT GROUP LLC",
+                 "ETA INTERESTS": "ETA INTERESTS LLC"}
+        lookups = {"ALPHA HOMES LLC": ("one", {"officerInfo": [{"AGNT_NM": "OMEGA USA LLC"}]}, []),
+                   "ETA INTERESTS LLC": ("one", {"officerInfo": [{"AGNT_NM": "OMEGA USA LLC"}]}, [])}
+        hcad = {"ALPHA HOMES": {"addr": "5900 TEST DRIVE SUITE 100, AUSTIN, TX 78731"},
+                "ZETA INVESTMENT GROUP": {"addr": "5900 TEST DR STE 100, AUSTIN, TX 78731"}}
+        notes = BA.near_misses(groups, names, lookups, hcad)
+        self.assertIn("same mailing address as ZETA INVESTMENT GROUP LLC", " ".join(notes[0]))
+        self.assertIn("same parent company or trust as ETA INTERESTS LLC", " ".join(notes[0]))
+        self.assertIn("not grouped", notes[1][0])
+        lookups["ZETA INVESTMENT GROUP LLC"] = ("one", {"registeredAgentName": "AGENTS INC.", "registeredOfficeAddressStreet":
+                                                         "5900 TEST DR STE 100", "registeredOfficeAddressCity": "AUSTIN",
+                                                         "registeredOfficeAddressState": "TX", "registeredOfficeAddressZip": "78731"}, [])
+        notes = BA.near_misses(groups, names, lookups, hcad)  # an agent service's office is no hint
+        self.assertNotIn("same mailing address", " ".join(notes.get(0, [])))
 
 
 class Purchases(unittest.TestCase):
