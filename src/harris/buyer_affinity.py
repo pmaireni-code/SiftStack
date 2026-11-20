@@ -217,11 +217,13 @@ def sig_match(a, b):
 
 
 def group_nodes(nodes):
-    """nodes: {key: {"people": {name}, "entities": {norm}, "self": {own name if a person}, "zips": {zip}}}
-    -> [(set of keys, linked_by)]. Two companies are one buyer when they share a manager / member / officer (a person
-    or a parent company). A purchase in a PERSON's own name joins a company only when the name matches one of its
-    people AND a ZIP agrees (the person's HCAD mailing vs the company's addresses): common names (one common
-    name owns hundreds of Harris accounts) never join on the name alone."""
+    """nodes: {key: {"people": {name}, "self": {own name if a person}, "zips": {zip}}} -> [(set of keys, linked_by)].
+    Operator's rule (2026-11-20): companies are ONE buyer only when the SAME PERSON is a manager / member / officer
+    of each (Texas Comptroller). A shared address, PO box, registered agent or parent company never groups them:
+    many unrelated LLCs use a lawyer's or an agent service's address (build_buyers flags those "Review by hand").
+    Trusts and companies listed as officers are not people and link nothing. A purchase in a PERSON's own name
+    joins a company only when the name matches one of its people AND a ZIP agrees (the person's HCAD mailing vs the
+    company's addresses): a common name owns hundreds of Harris accounts and never joins on the name alone."""
     keys = list(nodes)
     parent = {k: k for k in keys}
     link = {}
@@ -232,14 +234,13 @@ def group_nodes(nodes):
             k = parent[k]
         return k
 
-    sigs = {k: [(person_sig(p), p) for p in nodes[k]["people"] if person_sig(p)] for k in keys}
+    sigs = {k: [(person_sig(p), p) for p in nodes[k]["people"] if is_person_name(p) and person_sig(p)] for k in keys}
     for i, a in enumerate(keys):
         for b in keys[i + 1:]:
             hits = [n for sa, pa in sigs[a] for sb, pb in sigs[b] if sig_match(sa, sb)
                     and (not (pa in nodes[a].get("self", ()) or pb in nodes[b].get("self", ()))
                          or nodes[a].get("zips", set()) & nodes[b].get("zips", set()))  # a person's own purchase: name AND ZIP
                     for n in (pa, pb)]
-            hits += sorted(nodes[a]["entities"] & nodes[b]["entities"])
             if hits:
                 ra, rb = find(a), find(b)
                 if ra != rb:
@@ -254,6 +255,20 @@ def group_nodes(nodes):
         names = [n for p, v in link.items() if p <= g for n in v]
         out.append((g, link_name(names, selfs)))
     return out
+
+
+def is_person_name(n):
+    """A human name, not a company, a trust ('SCOTT H DOE 2006 TRUST', 'THE JANE DOE SECTION') or a number."""
+    return not (is_entity_name(n) or re.search(r"\d|\b(THE|SECTION|TRUST|TRUSTEE|ESTATE|FAMILY)\b", (n or "").upper()))
+
+
+def addr_key(a):
+    """One spelling per address: 'COUNTY RD. 2226' / 'COUNTY ROAD 2226', 'SUITE' / 'STE', ZIP+4 cut to 5."""
+    k = " ".join(re.sub(r"[^A-Z0-9 ]", " ", (a or "").upper()).split())
+    for long_, short in (("ROAD", "RD"), ("DRIVE", "DR"), ("SUITE", "STE"), ("STREET", "ST"), ("AVENUE", "AVE"),
+                         ("FREEWAY", "FWY"), ("NORTH", "N"), ("SOUTH", "S"), ("WEST", "W"), ("EAST", "E")):
+        k = re.sub(rf"\b{long_}\b", short, k)
+    return re.sub(r"\b(\d{5}) ?\d{4}\b", r"\1", k)
 
 
 def link_name(names, selfs=()):
@@ -343,10 +358,7 @@ def uniq_addrs(addrs):
     """Drop spelling variants of the same address ('COUNTY RD. 2226' / 'COUNTY ROAD 2226', 'SUITE' / 'STE')."""
     out, seen = [], set()
     for a in addrs:
-        k = " ".join(re.sub(r"[^A-Z0-9 ]", " ", (a or "").upper()).split())
-        for long_, short in (("ROAD", "RD"), ("DRIVE", "DR"), ("SUITE", "STE"), ("STREET", "ST"), ("AVENUE", "AVE"),
-                             ("FREEWAY", "FWY"), ("NORTH", "N"), ("SOUTH", "S"), ("WEST", "W"), ("EAST", "E")):
-            k = re.sub(rf"\b{long_}\b", short, k)
+        k = addr_key(a)
         if a and k not in seen:
             seen.add(k)
             out.append(a)
@@ -381,6 +393,41 @@ def cached_detail(sm, pid, cache_dir, today):
     return d
 
 
+def near_misses(groups, names, lookups, hcad):
+    """{group index: [review note]} for buyers that share only an address (HCAD or Comptroller mailing) or a parent
+    company with another buyer, and no person: NOT grouped (operator's rule), shown for a human to check."""
+    agent_offices = set()  # an agent SERVICE's office is the mailing address of hundreds of unrelated LLCs: not a hint
+    for kind, rec, _ in lookups.values():
+        if rec and is_entity_name(rec.get("registeredAgentName")):
+            agent_offices.add(addr_key(fmt_addr(rec.get("registeredOfficeAddressStreet"), rec.get("registeredOfficeAddressCity"),
+                                                f"{rec.get('registeredOfficeAddressState') or ''} {EO.zip5(rec.get('registeredOfficeAddressZip'))}")))
+    facts = []
+    for g, _ in groups:
+        addrs, parents = {}, set()
+        for k in g:
+            rec = (lookups.get(names[k]) or ("", None, []))[1] or {}
+            for a in ((hcad.get(k) or {}).get("addr"),
+                      fmt_addr(rec.get("mailingAddressStreet"), rec.get("mailingAddressCity"),
+                               f"{rec.get('mailingAddressState') or ''} {EO.zip5(rec.get('mailingAddressZip'))}")):
+                if a and addr_key(a) and addr_key(a) not in agent_offices:
+                    addrs[addr_key(a)] = a
+            parents |= {(o.get("AGNT_NM") or "").strip().upper() for o in rec.get("officerInfo") or []
+                        if (o.get("AGNT_NM") or "").strip() and not is_person_name(o.get("AGNT_NM"))}
+        facts.append((addrs, parents, " / ".join(sorted(names[k] for k in g))))
+    notes = {}
+    for i, (ai, pi, ni) in enumerate(facts):
+        for j, (aj, pj, nj) in enumerate(facts):
+            if i == j:
+                continue
+            for k in sorted(set(ai) & set(aj)):
+                notes.setdefault(i, []).append(f"same mailing address as {nj} ({ai[k]}), no shared person: not grouped, "
+                                               "check by hand (often a lawyer or an agent service)")
+            for p in sorted(pi & pj):
+                notes.setdefault(i, []).append(f"same parent company or trust as {nj} ({p.title()}), no shared person: "
+                                               "not grouped, check by hand")
+    return {i: v[:4] + ([f"... and {len(v) - 4} more of the same"] if len(v) > 4 else []) for i, v in notes.items()}
+
+
 def build_buyers(buys, subject, today, months, radius, lookups, hcad):
     """Group, score and describe every investor buyer. -> list of buyer dicts, best first."""
     by_key = {}
@@ -399,8 +446,10 @@ def build_buyers(buys, subject, today, months, radius, lookups, hcad):
         zips = EO.entity_zips(rec or {}) | ({EO.zip5(hcad[k]["addr"].rsplit(" ", 1)[-1])} if k in hcad else set())
         nodes[k] = {"people": people, "entities": ents, "self": set() if is_entity_name(names[k]) else {names[k]},
                     "zips": zips - {""}}
+    groups = group_nodes(nodes)
+    hints = near_misses(groups, names, lookups, hcad)
     out = []
-    for g, linked in group_nodes(nodes):
+    for gi, (g, linked) in enumerate(groups):
         bl = [b for k in g for b in by_key[k]]
         has_entity = any(is_entity_name(names[k]) for k in g)
         if not has_entity and len(bl) < 2:  # a person with one purchase is not an investor buyer
@@ -447,6 +496,7 @@ def build_buyers(buys, subject, today, months, radius, lookups, hcad):
             else:
                 review.append(f"{nm}: Comptroller lookup failed, run again")
                 src.append(f"{nm}: lookup failed")
+        review += hints.get(gi, [])
         n_co = sum(is_entity_name(names[k]) for k in keys)
         display = names[keys[0]] if len(keys) == 1 else (f"{linked} ({n_co} companies)" if n_co == len(keys)
                                                           else f"{linked} ({n_co} compan{'y' if n_co == 1 else 'ies'} + own name)")
