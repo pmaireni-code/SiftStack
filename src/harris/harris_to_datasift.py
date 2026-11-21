@@ -53,12 +53,26 @@ def split_owner(raw):
     return tc(first), tc(last), deceased
 
 
+MAX_VALUE = 400000  # operator 2026-11-21: a lead worth more (HCAD market value) is never uploaded
+
+
+def over_cap(mkt_val):
+    """True when the HCAD market value is known and above MAX_VALUE (an unknown value is kept; the grade decides)."""
+    try:
+        return float(mkt_val) > MAX_VALUE
+    except (TypeError, ValueError):
+        return False
+
+
 def main(match_path, meta_path, out_path):
     meta = {m["doc"]: m["cells"] for m in json.load(open(meta_path))}
-    out, skipped = [], 0
+    out, skipped, over = [], 0, 0
     for r in csv.DictReader(open(match_path)):
         if r["match"] == "NONE":
             skipped += 1
+            continue
+        if over_cap(r.get("mkt_val")):
+            over += 1
             continue
         dates = [c for c in meta.get(r["doc"], []) if c.count("/") == 2]
         sale, filed = (dates + ["", ""])[:2]
@@ -105,7 +119,8 @@ def main(match_path, meta_path, out_path):
         w = csv.DictWriter(f, fieldnames=COLS)
         w.writeheader()
         w.writerows(out)
-    print(f"{len(out)} rows written, {skipped} unmatched left out, {dupes} duplicate notices folded")
+    print(f"{len(out)} rows written, {skipped} unmatched left out, {over} over ${MAX_VALUE:,} left out (HCAD value), "
+          f"{dupes} duplicate notices folded")
 
 
 if __name__ == "__main__":

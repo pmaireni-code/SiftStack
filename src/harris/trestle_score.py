@@ -7,8 +7,8 @@
 
 Which numbers: every phone on the leads tagged Priority 1 or Blitz Active (--tags to change), except numbers
 a caller marked DNC / wrong / dead, numbers already scored less than 180 days ago, and numbers marked
-correct that were scored before. Leads also on "Harris - Senior Equity" are skipped (Senior is out until the
-operator says otherwise). Each query costs $0.020 (Phone Validation $0.015 + Litigator Check $0.005); a run
+correct that were scored before. Leads on "Harris - Senior Equity" are skipped unless they are also on
+"Harris - Foreclosure" (operator, 2026-11-21). Each query costs $0.020 (Phone Validation $0.015 + Litigator Check $0.005); a run
 stops before querying when it would go over TRESTLE_MAX_QUERIES (default 400 = $8.00).
 
 What it writes (rules in trestle.py): per number the tags "Trestle Scored" (+ "Litigator") and the dial tier
@@ -24,7 +24,7 @@ from crm import get_crm, guard  # noqa: E402
 import phone_priority as PP  # noqa: E402
 import trestle as T  # noqa: E402
 
-SENIOR = "Harris - Senior Equity"
+SENIOR, FORECLOSURE = "Harris - Senior Equity", "Harris - Foreclosure"
 
 
 def collect(crm, ids, today):
@@ -33,7 +33,7 @@ def collect(crm, ids, today):
     for lid in ids:
         d = crm.api.call(f"/api/internal/property/{lid}/")
         lists = [(x.get("title") if isinstance(x, dict) else x) for x in d.get("lists") or []]
-        if SENIOR in lists:
+        if SENIOR in lists and FORECLOSURE not in lists:  # a Senior lead that is also a foreclosure is worked (2026-11-21)
             continue
         owner = d.get("owner") or {}
         phones = []

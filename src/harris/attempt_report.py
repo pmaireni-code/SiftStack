@@ -6,7 +6,7 @@ lists leads with outbound calls in the window and no counter increase after thei
 
 Window: from the previous report's cut (kept as a timestamp in the run log) to now; 24 hours when unknown.
 Scope: leads on "Harris - Foreclosure" or "Harris - Probate" that can have calls (counter 1+, assigned to a
-caller, or tagged Priority 1 / Blitz Active). The Senior Equity list is never read; a lead also on it is skipped.
+caller, or tagged Priority 1 / Blitz Active). The Senior Equity list is never read; a lead on it is skipped unless also a foreclosure.
 
 Each lead's history is read TWICE and merged, because DataSift's log endpoint does not always return the same
 events. Verdicts:
@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 HOU = ZoneInfo("America/Chicago")
 LISTS = ("Harris - Foreclosure", "Harris - Probate")
-SENIOR = "Harris - Senior Equity"
+SENIOR, FORECLOSURE = "Harris - Senior Equity", "Harris - Foreclosure"
 PIPELINE_TAGS = ("Priority 1", "Blitz Active")
 INCREASE = "property.predictivecall.attempts.increased"
 RECORD_URL = "https://app.reisift.io/records/properties/{uuid}/details"  # same as src/sms_agent/escalate.py
@@ -144,7 +144,7 @@ def scan(crm, start, end, budget_s=BUDGET_S, clock=time.monotonic):
         try:
             d, read1 = crm.lead_activity(lid)
             on = {(x.get("title") if isinstance(x, dict) else x) for x in d.get("lists") or []}
-            if SENIOR in on:
+            if SENIOR in on and FORECLOSURE not in on:
                 out["skipped_senior"] += 1
                 continue
             _, read2 = crm.lead_activity(lid)

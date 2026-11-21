@@ -9,8 +9,11 @@ whose grade, notes or ZIP activity changed (dry run unless --commit).
 Rules (agreed with the operator 2026-11-01):
   Not Viable  equity under EQUITY_MIN: the sale price cannot pay off the loan plus costs
   Needs Data  no equity figure to judge on
-  Hot         equity >= EQUITY_HOT, single family, inside the investor buy box, ZIP not in the
-              bottom third for investor activity, and no Verify Equity flag
+  Hot         equity >= EQUITY_HOT (50%), single family, inside the investor buy box, estimated value inside
+              the county's MOST COMMON price band in the Market Finder (the band holding the most properties,
+              $215k-$346k in Harris on 2026-11-20), ZIP among the TOP_ZIPS (20) of the county by investor
+              purchases, and no Verify Equity flag (operator, 2026-11-21: the leads to work are the ones the
+              market study says: the majority price band, the best ZIPs, the most investor movement)
   Warm        everything else at or above EQUITY_MIN; Deal Notes says what kept it from Hot
 Buy box = DataSift's Recommended Filters for the county with two adjustments: no year-built cap
 (post-2010 homes are 21% of Harris single-family stock and 35% of these leads, and the equity rule
@@ -28,11 +31,21 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harris_status import parse_date  # noqa: E402
 
-EQUITY_HOT = 40.0
+EQUITY_HOT = 50.0  # operator 2026-11-21 (was 40)
 EQUITY_MIN = 25.0
 BATHS_MAX = 4
 VERIFY_YEARS = 5
 VERIFY_LTV = 0.85
+TOP_ZIPS = 20  # operator 2026-11-21: Hot only in the 20 ZIPs with the most investor purchases
+# Market Finder value bands (num_property_value_boundary_1..8), in dollars
+BANDS = [(0, 103000), (103000, 136000), (136000, 215000), (215000, 346000), (346000, 562000),
+         (562000, 890000), (890000, 1240000), (1240000, None)]
+
+
+def modal_band(county):
+    """The price band holding the most properties in the county -> (low, high)."""
+    counts = [(county.get(f"num_property_value_boundary_{i}") or 0) for i in range(1, 9)]
+    return BANDS[max(range(8), key=lambda i: counts[i])]
 # Prospect Score / Prospect Reasons: the one prospect score comparable across lists (foreclosure, probate,
 # senior). Here it mirrors Deal Grade / Deal Notes. DataSift's own temperature is never written: it is the
 # caller's, after a conversation (operator, 2026-11-11)
@@ -79,19 +92,20 @@ def num(v):
 
 
 def zip_tiers(zips):
-    """ZIP -> (High/Medium/Low, investor transactions over 6 months), by thirds within the county."""
+    """ZIP -> (High/Medium/Low, investor transactions over 6 months, rank in the county), thirds by activity."""
     tx = {z: m.get("num_investor_transactions") or 0 for z, m in zips.items()}
     ranked = sorted(tx.values())
     lo, hi = ranked[len(ranked) // 3], ranked[2 * len(ranked) // 3]
-    return {z: ("High" if v >= hi else "Medium" if v >= lo else "Low", int(v)) for z, v in tx.items()}
+    order = {z: i for i, z in enumerate(sorted(tx, key=lambda z: (-tx[z], z)), 1)}
+    return {z: ("High" if v >= hi else "Medium" if v >= lo else "Low", int(v), order[z]) for z, v in tx.items()}
 
 
-def grade(lead, box, tiers, today):
+def grade(lead, box, tiers, today, band=None):
     notes = []
     eq, value = num(lead.get("Equity Percent")), num(lead.get("Estimated Value"))
-    tier, tx = tiers.get((lead.get("Property ZIP Code") or "")[:5], ("", None))
+    tier, tx, rank = tiers.get((lead.get("Property ZIP Code") or "")[:5], ("", None, None))
     if tier:
-        notes.append(f"ZIP {lead['Property ZIP Code'][:5]}: {tx} investor buys in 6 mo ({tier})")
+        notes.append(f"ZIP {lead['Property ZIP Code'][:5]}: {tx} investor buys in 6 mo ({tier}, #{rank} in the county)")
     if eq is None:
         return "Needs Data", ["no equity estimate in DataSift"] + notes, tier
     notes.insert(0, f"equity {eq:.0f}%")
@@ -108,8 +122,14 @@ def grade(lead, box, tiers, today):
         v = num(lead.get(col))
         if v is not None and not (low <= v <= high):
             why.append(f"{label} {v:,.0f} outside {low:,.0f}-{high:,.0f}")
-    if tier == "Low":
-        why.append("low investor activity in the ZIP")
+    if not rank or rank > TOP_ZIPS:
+        why.append(f"ZIP not in the top {TOP_ZIPS} for investor buys" + (f" (#{rank})" if rank else ""))
+    if band:
+        lo, hi = band
+        if value is None or value < lo or (hi is not None and value > hi):
+            shown = "unknown" if value is None else f"{value:,.0f}"
+            span = f"{lo:,.0f}-{hi:,.0f}" if hi else f"{lo:,.0f}+"
+            why.append(f"value {shown} outside the main price band {span}")
     loan, loan_d = num(lead.get("Original Loan Amount")), parse_date(lead.get("Loan Date"))
     if loan and value and loan_d and (today - loan_d).days < VERIFY_YEARS * 365 and loan >= VERIFY_LTV * value:
         why.append(f"VERIFY EQUITY: ${loan:,.0f} loan from {loan_d:%m/%Y} vs ${value:,.0f} value")
@@ -122,6 +142,9 @@ def main(market_path, out_path, *flags):
     from crm import get_crm
     market = json.load(open(market_path))
     tiers = zip_tiers(market["zips"])
+    band = modal_band(market.get("county") or {})
+    print(f"rules: equity >= {EQUITY_HOT:.0f}%, price band {band[0]:,}-{band[1]:,}, top {TOP_ZIPS} ZIPs: "
+          + ", ".join(z for z, t in sorted(tiers.items(), key=lambda x: x[1][2]) if t[2] <= TOP_ZIPS))
     crm = get_crm()
     leads = crm.read_leads("Harris - Foreclosure", with_facts=True)
     today = date.today()
@@ -130,7 +153,7 @@ def main(market_path, out_path, *flags):
     for l in leads:
         if l.get("Foreclosure Status") == "Auction Passed":
             continue  # closed: keep its last grade
-        g, notes, tier = grade(l, market["buy_box"], tiers, today)
+        g, notes, tier = grade(l, market["buy_box"], tiers, today, band)
         flood, sfha = flood_zone(num(l.get("Latitude")), num(l.get("Longitude")))
         l["Deal Grade"], l["Deal Notes"], l["ZIP Investor Activity"] = g, "; ".join(notes + [flood])[:500], tier
         l["_flood_tag"] = sfha

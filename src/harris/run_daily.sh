@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Daily Harris run: Starting Bid, postponements, Foreclosure Status and Deal Grade for every lead,
-# then probate leads assigned to their user 14 days after the death (probate_assign.py), and the
+# (probate assignment is OFF since 2026-11-21: foreclosure only), and the
 # dialing order of every phone on the call pipeline (phone_priority.py), and the skip-trace queue
 # (skiptrace_queue.py: qualifying foreclosure leads with no phone get "Skip Trace Batch 1").
 #
@@ -50,9 +50,9 @@ step "bid listings"    -- bid_listings
 step "bid updater"     needs "$W/leads.csv" "$W/bids.json" -- bid_updater
 step "market finder"   -- market
 step "deal grade"      needs "$W/market.json" -- grade
-step "probate assign"  -- probate        # Maireni Peguero, 14 days after the death
+# step "probate assign"  -- probate      # OFF (operator 2026-11-21: foreclosure only until further notice)
 step "phone priority"  -- phones         # Priority 1 / Blitz Active
-step "skip trace queue" -- stqueue       # single family, <= $400k, equity >= 40%, no phone -> Skip Trace Batch 1
+step "skip trace queue" -- stqueue       # Deal Grade Hot (equity >= 50%, price band, top 20 ZIP), <= $400k, no phone -> Skip Trace Batch 1
 step "entity owner"   -- entowner       # LLC / company owners: person behind it (TX Comptroller) -> notes + "Entity Owner"
 step "summary"         needs "$W/graded.csv" -- summary
 run_footer "$COMMIT"
