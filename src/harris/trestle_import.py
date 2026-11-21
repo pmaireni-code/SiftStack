@@ -20,8 +20,8 @@ trestle_score.lead_outcome; operator 2026-11-12):
 Nothing else changes. A line type that differs from DataSift's is REPORTED, not written (no rule yet).
 If the CSV has no litigator column the litigator check was not run: the plan says so and no number is marked.
 
-Safety: every lead is read live first; a lead whose owner uuid no longer matches the CSV, a lead also on
-Harris - Senior Equity, or a CSV number no longer on the lead is skipped and reported. Tiers are computed
+Safety: every lead is read live first; a lead whose owner uuid no longer matches the CSV, a lead on Harris - Senior
+Equity that is not also a foreclosure, or a CSV number no longer on the lead is skipped and reported. Tiers are computed
 from the LIVE phone (a status a caller set after the export counts). Every write is read back; the run stops
 after the first lead if it does not read back.
 """
@@ -71,7 +71,7 @@ def plan_lead(crm, pid, csv_lead):
     """Read the lead live and work out its changes. -> dict, or {"skip": reason}."""
     lead = (TS.collect(crm, [pid], date.today()) or [None])[0]
     if not lead:
-        return {"skip": "on Harris - Senior Equity"}
+        return {"skip": "on Harris - Senior Equity only"}
     if lead["owner"] != csv_lead["owner"]:
         return {"skip": "owner changed since the export (owner uuid differs)"}
     live = {T.digits(p["number"]): p for p in lead["phones"]}

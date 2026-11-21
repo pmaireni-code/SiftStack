@@ -7,7 +7,7 @@ Criteria (operator, 2026-11-15; every run states which ones it used):
   --leads N               how many leads (default 2), ranked: most phones in --phone-status, then most call
                           attempts, then most phones
   --list NAME             a list to search (repeatable; default Harris - Foreclosure and Harris - Probate).
-                          Harris - Senior Equity is refused, and a lead also on it is skipped.
+                          Harris - Senior Equity is refused; a lead on it is skipped unless also a foreclosure.
   --phone-status S,S      at least one phone in one of these statuses (default NO_ANSWER; "any" = no filter)
   --all-phones S,S        EVERY phone in one of these statuses
   --min-attempts N        DataSift call attempts on the lead at least N
@@ -33,7 +33,7 @@ from crm import get_crm  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_LISTS = ["Harris - Foreclosure", "Harris - Probate"]
-SENIOR = "Harris - Senior Equity"
+SENIOR, FORECLOSURE = "Harris - Senior Equity", "Harris - Foreclosure"
 NEVER_STATUS = {"dead lead", "dead", "not_interested", "not interested", "closed", "sold", "do not contact", "dnc"}
 BAD_PHONE = {"WRONG", "DEAD", "DNC", "CORRECT_DNC", "WRONG_DNC", "DNC_WRONG", "DNC_CORRECT", "WRONG_NUMBER",
              "DEAD_NUMBER"}
@@ -57,8 +57,8 @@ def lead_view(d):
 
 def refusal(v, c):
     """Why this lead can never be exported ("" = it may be)."""
-    if SENIOR in v["lists"]:
-        return "on Harris - Senior Equity"
+    if SENIOR in v["lists"] and FORECLOSURE not in v["lists"]:  # Senior that is also a foreclosure is worked
+        return "on Harris - Senior Equity only"
     if (v["status"] or "").strip().lower() in NEVER_STATUS:
         return f"lead status {v['status']}"
     if LITIGATOR_TAG in v["tags"]:

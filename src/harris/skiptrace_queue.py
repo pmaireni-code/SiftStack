@@ -3,14 +3,17 @@ Dry run unless --commit.
 
     python3 skiptrace_queue.py [--commit] [--limit N]
 
-Operator's rule (2026-11-17): every lead on "Harris - Foreclosure" that is
-  - Single Family Residential,
+Operator's rule (2026-11-17, tightened 2026-11-21). The queue is the result of the market analysis: every lead on
+"Harris - Foreclosure" that the daily Deal Grade marks HOT (harris_grade: equity >= 50%, single family, inside the
+buy box, in the county's main price band, in one of the top 20 ZIPs for investor purchases, no Verify Equity) and is
   - estimated value $400,000 or less,
-  - high equity: Equity Percent at or above harris_grade.EQUITY_HOT (40%),
   - with NO phone, and never skip traced (no "REISift Skipped" / "DataSift Skipped", no "Skip Trace No Result"),
-gets the tag "Skip Trace Batch 1", the tag the operator runs DataSift's skip trace on. Leads also on
-"Harris - Senior Equity", leads with a dead / closed / not-interested status, and leads that already carry
-the tag are left alone. It only ADDS that tag (nothing is removed or overwritten); every write is read back.
+gets the tag "Skip Trace Batch 1", the tag the operator runs DataSift's skip trace on; the numbers it finds then go
+to Trestle (trestle_export.py) and come back as dial tiers (trestle_import.py / phone_priority.py). A lead also on
+"Harris - Senior Equity" is included when it is on Harris - Foreclosure and meets these rules (operator, 2026-11-21);
+a Senior-only lead is never read. Leads with a dead / closed / not-interested status, a dead foreclosure status, and
+leads that already carry the tag are left alone. It only ADDS that tag (nothing is removed or overwritten); every
+write is read back.
 
 Runs in the daily (run_daily.sh) and the weekly upload (run_weekly.sh), so new leads join the queue the day
 they arrive; DataSift's skip trace itself is never run over the API (forbidden by the brakes).
@@ -60,22 +63,30 @@ def is_entity(d):
 DEAD_FORECLOSURE = {"Deadline Passed", "Auction Passed"}  # harris_status: the lead is dead for this sale
 
 
+def field_label(crm, row, field):
+    """A select field's label from a list_assignments row (the field holds an option uuid)."""
+    v = row.get(field) or ""
+    return {u: label for label, u in ((crm.fields.get(field) or {}).get("options") or {}).items()}.get(v, v)
+
+
 def foreclosure_status(crm, row):
-    """The lead's Foreclosure Status label from a list_assignments row (the field holds an option uuid)."""
-    v = row.get("Foreclosure Status") or ""
-    return {u: label for label, u in ((crm.fields.get("Foreclosure Status") or {}).get("options") or {}).items()}.get(v, v)
+    return field_label(crm, row, "Foreclosure Status")
 
 
-def why_not(d, entities_too=False, fstatus=""):
+WORK_GRADE = "Hot"  # operator 2026-11-21: only what the market analysis marks Hot is worked
+
+
+def why_not(d, entities_too=False, fstatus="", grade=None):
     """"" when the lead joins the queue, else the reason it does not. A business-owned lead goes to
-    entity_owner.py instead (operator, 2026-11-18); entities_too=True judges it on the other rules only."""
+    entity_owner.py instead (operator, 2026-11-18); entities_too=True judges it on the other rules only.
+    grade: the lead's Deal Grade; only WORK_GRADE joins (None = not checked, for callers without it)."""
     tags = {N(t) for t in d.get("tags") or []}
     lists = {N(x) for x in d.get("lists") or []}
     st = d.get("status")
     st = ((N(st) if isinstance(st, dict) else st) or "").strip().lower()
     value, eq = num(d.get("estimate_value")), num(d.get("equity_percent"))
-    if SENIOR in lists:
-        return "on Senior Equity"
+    if SENIOR in lists and LIST not in lists:
+        return "on Senior Equity only (not a foreclosure)"
     if fstatus in DEAD_FORECLOSURE:
         return f"foreclosure {fstatus.lower()} (dead for this sale)"
     if st in DEAD:
@@ -88,6 +99,8 @@ def why_not(d, entities_too=False, fstatus=""):
         return "already queued"
     if not entities_too and is_entity(d):
         return "owned by a company / trust (entity_owner.py)"
+    if grade is not None and grade != WORK_GRADE:
+        return f"Deal Grade {grade or 'not set yet'} (only {WORK_GRADE} is worked)"
     if d.get("structure_type") != STRUCTURE:
         return "not single family"
     if value is None or value > MAX_VALUE:
@@ -102,9 +115,9 @@ def main(*flags):
     limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
     crm = get_crm()
     todo, why = [], {}
-    for r in crm.list_assignments(LIST, ("Foreclosure Status",)):
+    for r in crm.list_assignments(LIST, ("Foreclosure Status", "Deal Grade")):
         d = crm.api.call(f"/api/internal/property/{r['id']}/")
-        w = why_not(d, fstatus=foreclosure_status(crm, r))
+        w = why_not(d, fstatus=foreclosure_status(crm, r), grade=field_label(crm, r, "Deal Grade"))
         why[w or "QUEUE"] = why.get(w or "QUEUE", 0) + 1
         if not w:
             todo.append((r["id"], (d.get("address") or {}).get("street") or r["id"], [N(t) for t in d.get("tags") or []]))

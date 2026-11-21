@@ -120,7 +120,7 @@ class Scan(unittest.TestCase):
         return {"L1": {"lists": ["Harris - Foreclosure"], "counter": 0, "reads": [miss, miss], "street": "1 Elm St"},
                 "L2": {"lists": ["Harris - Probate"], "counter": 1, "reads": [ok, ok], "street": "2 Oak St"},
                 "L3": {"lists": ["Harris - Foreclosure"], "counter": 1, "reads": [ok, ok[:1]], "street": "3 Pine St"},
-                "L4": {"lists": ["Harris - Foreclosure", A.SENIOR], "counter": 0, "reads": [miss, miss], "street": "4 Senior St"}}
+                "L4": {"lists": ["Harris - Probate", A.SENIOR], "counter": 0, "reads": [miss, miss], "street": "4 Senior St"}}
 
     def test_groups_senior_and_read_only(self):
         crm = FakeCRM(self.leads())

@@ -226,11 +226,12 @@ class ScoreRun(unittest.TestCase):
         _, queried, out, _ = self.run_score(crm, "--commit", SIFT_MODE="live")
         self.assertEqual(queried, [], "numbers scored today are not queried again for 180 days")
 
-    def test_senior_leads_are_skipped(self):
+    def test_senior_leads_that_are_foreclosures_are_scored(self):
+        # operator 2026-11-21: a lead on Senior Equity that is also on Harris - Foreclosure is worked
         crm = FakeCRM(n_leads=3, senior=(1,))
         _, queried, _, _ = self.run_score(crm, "--commit", SIFT_MODE="live")
-        self.assertFalse([n for n in queried if n.startswith("7135501")])
-        self.assertEqual(len(queried), 6)
+        self.assertTrue([n for n in queried if n.startswith("7135501")])
+        self.assertEqual(len(queried), 9)
 
     def test_litigator_answer_tags_the_lead(self):
         crm = FakeCRM(n_leads=1)

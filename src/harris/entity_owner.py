@@ -6,7 +6,7 @@ the lead's notes. Dry run unless --commit.
 Operator's rule (2026-11-18). DataSift's skip trace only traces people, so a lead owned by an LLC, a company, a
 trust or a bank never gets a phone from it (it sits in the queue forever). For every lead on "Harris -
 Foreclosure" that is owned by an entity, has no phone, and is in the skip-trace queue or qualifies for it
-(skiptrace_queue's rule: single family, <= $400k, equity >= 40%):
+(skiptrace_queue's rule: Deal Grade Hot, <= $400k; operator 2026-11-21):
   - look the entity up in the Texas Comptroller's franchise-tax search (public, free): its managers / members /
     officers with title and address, and its registered agent;
   - add ONE note to the lead with what was found and where from (never twice: the note carries a marker);
@@ -129,7 +129,7 @@ def decide(d, kind, rec, cands, today=None):
 def candidates(crm):
     """Entity-owned foreclosure leads with no phone that are in the skip-trace queue or qualify for it."""
     out = []
-    for r in crm.list_assignments(Q.LIST, ("Foreclosure Status",)):
+    for r in crm.list_assignments(Q.LIST, ("Foreclosure Status", "Deal Grade")):
         if Q.foreclosure_status(crm, r) in Q.DEAD_FORECLOSURE:  # dead for this sale: not worth the lookup
             continue
         d = crm.api.call(f"/api/internal/property/{r['id']}/")
@@ -139,7 +139,7 @@ def candidates(crm):
         if Q.TAG in tags and not (d.get("owner") or {}).get("phones"):
             out.append((r["id"], d))
             continue
-        why = Q.why_not(d, entities_too=True)
+        why = Q.why_not(d, entities_too=True, grade=Q.field_label(crm, r, "Deal Grade"))
         if not why:
             out.append((r["id"], d))
     return out

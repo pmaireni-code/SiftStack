@@ -16,7 +16,17 @@ def d(**kw):
 class Queue(unittest.TestCase):
     def test_qualifies(self):
         self.assertEqual(Q.why_not(d()), "")
-        self.assertEqual(Q.why_not(d(estimate_value=400000, equity_percent=40)), "", "both limits are inclusive")
+        self.assertEqual(Q.why_not(d(estimate_value=400000, equity_percent=50)), "", "both limits are inclusive")
+        self.assertEqual(Q.why_not(d(), grade="Hot"), "")
+
+    def test_only_hot_is_worked(self):  # operator 2026-11-21: the queue is the market analysis' Hot leads
+        self.assertIn("Deal Grade Warm", Q.why_not(d(), grade="Warm"))
+        self.assertIn("not set yet", Q.why_not(d(), grade=""))
+
+    def test_senior_that_is_a_foreclosure_joins(self):
+        both = [{"title": "Harris - Foreclosure"}, {"title": "Harris - Senior Equity"}]
+        self.assertEqual(Q.why_not(d(lists=both), grade="Hot"), "")
+        self.assertIn("Senior Equity only", Q.why_not(d(lists=[{"title": "Harris - Senior Equity"}])))
 
     def test_each_rule(self):
         self.assertIn("phones", Q.why_not(d(owner={"phones": [{"number": "1"}]})))
@@ -28,7 +38,7 @@ class Queue(unittest.TestCase):
         self.assertIn("single family", Q.why_not(d(structure_type="Duplex (2 units, any combination)")))
         self.assertIn("400k", Q.why_not(d(estimate_value=400001)))
         self.assertIn("400k", Q.why_not(d(estimate_value=None)))
-        self.assertIn("equity", Q.why_not(d(equity_percent=39.9)))
+        self.assertIn("equity", Q.why_not(d(equity_percent=49.9)))
         self.assertIn("equity", Q.why_not(d(equity_percent=None)))
         self.assertIn("Senior", Q.why_not(d(lists=[{"title": "Harris - Senior Equity"}])))
         for st in ("Dead Lead", "not_interested", {"title": "closed"}):
